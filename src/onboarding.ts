@@ -30,38 +30,6 @@ async function noteDingTalkCredentialsHelp(prompter: {
 }
 
 /**
- * Prompt for account ID selection
- */
-async function promptAccountId(params: {
-  cfg: OpenClawConfig;
-  prompter: {
-    text: (options: {
-      message: string;
-      placeholder?: string;
-      initialValue?: string;
-      validate?: (value: string | undefined) => string | undefined;
-    }) => Promise<string>;
-  };
-  label: string;
-  currentId?: string;
-  listAccountIds: (cfg: OpenClawConfig) => string[];
-  defaultAccountId: string;
-}): Promise<string> {
-  const { cfg, prompter, label, currentId, listAccountIds, defaultAccountId } = params;
-  const existingIds = listAccountIds(cfg);
-  const suggestions = existingIds.length > 0 ? existingIds.join(", ") : "default";
-
-  const result = await prompter.text({
-    message: `${label} account ID`,
-    placeholder: suggestions,
-    initialValue: currentId ?? defaultAccountId,
-    validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-  });
-
-  return normalizeAccountId(String(result));
-}
-
-/**
  * DingTalk Onboarding Adapter
  */
 export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
@@ -83,24 +51,13 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     cfg,
     prompter,
     accountOverrides,
-    shouldPromptAccountIds,
   }) => {
     const dingtalkOverride = (accountOverrides as Record<string, string | undefined>).dingtalk?.trim();
     const defaultDingTalkAccountId = resolveDefaultDingTalkAccountId(cfg);
-    let dingtalkAccountId = dingtalkOverride
+    // 直接使用 override 或默认账户 ID，不再提示用户输入
+    const dingtalkAccountId = dingtalkOverride
       ? normalizeAccountId(dingtalkOverride)
       : defaultDingTalkAccountId;
-
-    if (shouldPromptAccountIds && !dingtalkOverride) {
-      dingtalkAccountId = await promptAccountId({
-        cfg,
-        prompter,
-        label: "DingTalk",
-        currentId: dingtalkAccountId,
-        listAccountIds: listDingTalkAccountIds,
-        defaultAccountId: defaultDingTalkAccountId,
-      });
-    }
 
     let next = cfg;
     const resolvedAccount = resolveDingTalkAccount({

@@ -1,5 +1,5 @@
 {
-  "name": "@largezhou/openclaw-dingtalk",
+  "name": "@largezhou/dingtalk",
   "version": "0.0.1",
   "description": "OpenClaw DingTalk (钉钉) channel plugin",
   "main": "dist/index.js",
@@ -64,7 +64,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@largezhou/openclaw-dingtalk",
+      "npmSpec": "@largezhou/dingtalk",
       "localPath": "",
       "defaultChoice": "npm"
     }

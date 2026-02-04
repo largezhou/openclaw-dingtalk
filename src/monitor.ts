@@ -1,7 +1,7 @@
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import type { DingTalkMessageData, ResolvedDingTalkAccount } from "./types.js";
-import { replyViaWebhook } from "./client.js";
+import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl } from "./client.js";
 import { resolveDingTalkAccount } from "./accounts.js";
 import { getDingTalkRuntime } from "./runtime.js";
 
@@ -59,6 +59,46 @@ export function getDingTalkRuntimeState(accountId: string) {
 }
 
 /**
+ * 下载钉钉图片并保存到本地
+ * @param downloadCode - 图片下载码
+ * @param account - 钉钉账户配置
+ * @returns 保存的媒体信息
+ */
+async function downloadAndSaveImage(
+  downloadCode: string,
+  account: ResolvedDingTalkAccount
+): Promise<{ path: string; contentType: string } | undefined> {
+  const pluginRuntime = getDingTalkRuntime();
+
+  try {
+    // 1. 获取下载链接
+    const downloadUrl = await getFileDownloadUrl(downloadCode, account);
+    console.log(`[DingTalk] 获取图片下载链接成功`);
+
+    // 2. 下载图片
+    const buffer = await downloadFromUrl(downloadUrl);
+    console.log(`[DingTalk] 下载图片成功，大小: ${(buffer.length / 1024).toFixed(2)} KB`);
+
+    // 3. 使用 OpenClaw 的 media 工具保存图片
+    // contentType 传 undefined，让 OpenClaw 自动检测
+    const saved = await pluginRuntime.channel.media.saveMediaBuffer(
+      buffer,
+      undefined,
+      "inbound"
+    );
+
+    console.log(`[DingTalk] 图片已保存到: ${saved.path}`);
+    return {
+      path: saved.path,
+      contentType: saved.contentType ?? "image/png",
+    };
+  } catch (err) {
+    console.error("[DingTalk] 下载或保存图片失败:", err);
+    return undefined;
+  }
+}
+
+/**
  * 启动钉钉 Stream 监听器
  */
 export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult {
@@ -85,7 +125,10 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
   });
 
   // 异步处理消息（不阻塞钉钉响应）
-  const processMessageAsync = async (data: DingTalkMessageData) => {
+  const processMessageAsync = async (
+    data: DingTalkMessageData,
+    mediaInfo?: { path: string; contentType: string }
+  ) => {
     try {
       // 构建消息上下文
       const isGroup = data.conversationType === "2";
@@ -95,7 +138,9 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       // 确定 chatId（群聊用 conversationId，单聊用 senderId）
       const chatId = isGroup ? data.conversationId : senderId;
 
+      // 文本内容：如果是图片消息，使用占位符
       const textContent = data.text?.content?.trim() ?? "";
+      const rawBody = textContent || (mediaInfo ? "<media:image>" : "");
 
       // 构建 From/To 地址
       const fromAddress = isGroup
@@ -120,7 +165,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         channel: "DingTalk",
         from: senderName || senderId,
         timestamp: parseInt(data.createAt),
-        body: textContent,
+        body: rawBody,
         chatType: isGroup ? "group" : "direct",
         sender: {
           id: senderId,
@@ -129,11 +174,11 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         envelope: envelopeOptions,
       });
 
-      // 构建消息上下文
+      // 构建消息上下文，包含图片信息
       const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
         Body: body,
-        RawBody: textContent,
-        CommandBody: textContent,
+        RawBody: rawBody,
+        CommandBody: rawBody,
         From: fromAddress,
         To: toAddress,
         SessionKey: route.sessionKey,
@@ -150,6 +195,10 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         WasMentioned: data.isInAtList,
         OriginatingChannel: "dingtalk" as const,
         OriginatingTo: toAddress,
+        // 添加图片媒体信息
+        MediaPath: mediaInfo?.path,
+        MediaType: mediaInfo?.contentType,
+        MediaUrl: mediaInfo?.path,
       });
 
       // 调用 OpenClaw 的消息分发
@@ -209,6 +258,23 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     try {
       const data = JSON.parse(message.data) as DingTalkMessageData;
 
+      // 打印收到的消息信息
+      const isGroup = data.conversationType === "2";
+      console.log(`[DingTalk] ========== 收到新消息 ==========`);
+      console.log(`[DingTalk] 消息ID: ${data.msgId}`);
+      console.log(`[DingTalk] 消息类型: ${data.msgtype}`);
+      console.log(`[DingTalk] 发送者: ${data.senderNick} (${data.senderStaffId})`);
+      console.log(`[DingTalk] 聊天类型: ${isGroup ? "群聊" : "单聊"}`);
+      if (isGroup) {
+        console.log(`[DingTalk] 会话ID: ${data.conversationId}`);
+      }
+      if (data.msgtype === "text") {
+        console.log(`[DingTalk] 文本内容: ${data.text?.content?.trim()}`);
+      } else if (data.msgtype === "picture") {
+        console.log(`[DingTalk] 图片下载码: ${data.content?.downloadCode}`);
+      }
+      console.log(`[DingTalk] ================================`);
+
       // Record inbound activity
       recordChannelRuntimeState({
         channel: "dingtalk",
@@ -220,35 +286,74 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
 
       const senderId = data.senderStaffId;
 
-      // 只处理文本消息
-      if (data.msgtype !== "text") {
-        // 异步回复不支持的消息类型
-        if (data.sessionWebhook) {
-          replyViaWebhook(data.sessionWebhook, "暂不支持该类型消息，请发送文本消息。", {
-            atUserIds: [senderId],
-          }).catch((err) => {
-            console.error("[DingTalk] 回复非文本消息提示失败:", err);
-          });
-        }
-        // 立即返回成功响应给钉钉服务器
-        client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
-        return;
-      }
-
-      const textContent = data.text?.content?.trim() ?? "";
-
-      if (!textContent) {
-        client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
-        return;
-      }
-
       // 立即返回成功响应给钉钉服务器，避免超时
       client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
 
-      // 异步处理消息（不阻塞）
-      processMessageAsync(data).catch((err) => {
-        console.error("[DingTalk] 异步处理消息失败:", err);
-      });
+      // 处理图片消息
+      if (data.msgtype === "picture") {
+        console.log(`[DingTalk] 收到图片消息，发送者: ${data.senderNick}`);
+
+        const downloadCode = data.content?.downloadCode;
+        if (!downloadCode) {
+          console.log("[DingTalk] 图片消息缺少 downloadCode");
+          if (data.sessionWebhook) {
+            replyViaWebhook(data.sessionWebhook, "图片处理失败：缺少下载码", {
+              atUserIds: [senderId],
+            }).catch((err) => {
+              console.error("[DingTalk] 回复图片错误提示失败:", err);
+            });
+          }
+          return;
+        }
+
+        // 异步下载并处理图片
+        downloadAndSaveImage(downloadCode, account)
+          .then((mediaInfo) => {
+            if (mediaInfo) {
+              // 处理带图片的消息
+              processMessageAsync(data, mediaInfo).catch((err) => {
+                console.error("[DingTalk] 处理图片消息失败:", err);
+              });
+            } else {
+              // 图片下载/保存失败
+              if (data.sessionWebhook) {
+                replyViaWebhook(data.sessionWebhook, "图片处理失败，请稍后重试", {
+                  atUserIds: [senderId],
+                }).catch((err) => {
+                  console.error("[DingTalk] 回复图片错误提示失败:", err);
+                });
+              }
+            }
+          })
+          .catch((err) => {
+            console.error("[DingTalk] 下载图片失败:", err);
+          });
+        return;
+      }
+
+      // 处理文本消息
+      if (data.msgtype === "text") {
+        const textContent = data.text?.content?.trim() ?? "";
+
+        if (!textContent) {
+          return;
+        }
+
+        // 异步处理消息（不阻塞）
+        processMessageAsync(data).catch((err) => {
+          console.error("[DingTalk] 异步处理消息失败:", err);
+        });
+        return;
+      }
+
+      // 不支持的消息类型
+      if (data.sessionWebhook) {
+        replyViaWebhook(data.sessionWebhook, "暂不支持该类型消息，请发送文本或图片消息。", {
+          atUserIds: [senderId],
+        }).catch((err) => {
+          console.error("[DingTalk] 回复非支持消息提示失败:", err);
+        });
+      }
     } catch (error) {
       console.error("[DingTalk] 解析消息出错:", error);
       recordChannelRuntimeState({

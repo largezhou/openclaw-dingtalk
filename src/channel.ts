@@ -1,11 +1,13 @@
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
+  loadWebMedia,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type ChannelAccountSnapshot,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
+import path from "path";
 import { getDingTalkRuntime } from "./runtime.js";
 import {
   listDingTalkAccountIds,
@@ -14,7 +16,7 @@ import {
   resolveDingTalkAccount,
 } from "./accounts.js";
 import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount } from "./types.js";
-import { sendTextMessage, probeDingTalkBot, replyViaWebhook } from "./client.js";
+import { sendTextMessage, sendImageMessage, uploadMedia, probeDingTalkBot, replyViaWebhook } from "./client.js";
 import { monitorDingTalkProvider } from "./monitor.js";
 import { dingtalkOnboardingAdapter } from "./onboarding.js";
 
@@ -268,11 +270,43 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       return { channel: "dingtalk", ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
-      // TODO: 实现媒体消息发送
-      // 目前先发送文本，附带媒体链接
       const account = resolveDingTalkAccount({ cfg, accountId: accountId ?? undefined });
-      const messageText = mediaUrl ? `${text}\n\n📎 附件: ${mediaUrl}` : text;
-      const result = await sendTextMessage(to, messageText, { account });
+
+      // 如果有媒体 URL，尝试发送图片
+      if (mediaUrl) {
+        try {
+          console.log(`[DingTalk] 准备发送图片: ${mediaUrl}`);
+
+          // 使用 OpenClaw 的 loadWebMedia 加载媒体（支持 URL、本地路径、file://、~ 等）
+          const media = await loadWebMedia(mediaUrl);
+          console.log(`[DingTalk] 加载图片成功，大小: ${(media.buffer.length / 1024).toFixed(2)} KB`);
+
+          // 上传到钉钉
+          const fileName = media.fileName || path.basename(mediaUrl) || `image_${Date.now()}.png`;
+          const uploadResult = await uploadMedia(media.buffer, fileName, account);
+          console.log(`[DingTalk] 上传图片成功，photoURL: ${uploadResult.url}`);
+
+          // 发送图片消息
+          const imageResult = await sendImageMessage(to, uploadResult.url, { account });
+          console.log(`[DingTalk] 发送图片消息成功`);
+
+          // 如果有文本，再发送文本消息
+          if (text?.trim()) {
+            await sendTextMessage(to, text, { account });
+          }
+
+          return { channel: "dingtalk", ...imageResult };
+        } catch (err) {
+          console.error("[DingTalk] 发送图片失败:", err);
+          // 降级：发送文本消息附带链接
+          const fallbackText = text ? `${text}\n\n📎 图片: ${mediaUrl}` : `📎 图片: ${mediaUrl}`;
+          const result = await sendTextMessage(to, fallbackText, { account });
+          return { channel: "dingtalk", ...result };
+        }
+      }
+
+      // 没有媒体，只发送文本
+      const result = await sendTextMessage(to, text ?? "", { account });
       return { channel: "dingtalk", ...result };
     },
   },

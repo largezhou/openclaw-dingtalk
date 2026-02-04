@@ -244,3 +244,217 @@ export async function probeDingTalkBot(
     };
   }
 }
+
+// ======================= 图片处理 =======================
+
+/**
+ * 获取钉钉文件下载链接
+ * @param downloadCode - 文件下载码
+ * @param account - 钉钉账户配置
+ * @returns 下载链接
+ */
+export async function getFileDownloadUrl(
+  downloadCode: string,
+  account: ResolvedDingTalkAccount
+): Promise<string> {
+  const accessToken = await getAccessToken(account);
+  const robotClient = createRobotClient();
+
+  const headers = new robot_1_0.RobotMessageFileDownloadHeaders({
+    xAcsDingtalkAccessToken: accessToken,
+  });
+
+  const request = new robot_1_0.RobotMessageFileDownloadRequest({
+    downloadCode,
+    robotCode: account.clientId,
+  });
+
+  const response = await robotClient.robotMessageFileDownloadWithOptions(
+    request,
+    headers,
+    new $Util.RuntimeOptions({})
+  );
+
+  if (response.body?.downloadUrl) {
+    return response.body.downloadUrl;
+  }
+
+  throw new Error("获取下载链接失败: 返回结果为空");
+}
+
+/**
+ * 从 URL 下载文件
+ * @param url - 下载链接
+ * @returns 文件内容 Buffer
+ */
+export async function downloadFromUrl(url: string): Promise<Buffer> {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`下载文件失败: ${response.status} ${response.statusText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+// ======================= 发送图片消息 =======================
+
+export interface UploadMediaResult {
+  mediaId: string;
+  url: string;
+}
+
+/**
+ * 上传媒体文件到钉钉（使用旧版 oapi 接口）
+ * @param fileBuffer - 文件 Buffer
+ * @param fileName - 文件名
+ * @param account - 钉钉账户配置
+ * @param type - 文件类型：image, voice, video, file
+ * @returns 包含 media_id 和公网可访问 URL 的对象
+ */
+export async function uploadMedia(
+  fileBuffer: Buffer,
+  fileName: string,
+  account: ResolvedDingTalkAccount,
+  type = "image"
+): Promise<UploadMediaResult> {
+  const accessToken = await getAccessToken(account);
+
+  // 使用 FormData 上传
+  const formData = new FormData();
+  // 将 Buffer 转换为 Uint8Array 以兼容 Blob
+  const uint8Array = new Uint8Array(fileBuffer);
+  const blob = new Blob([uint8Array], { type: "image/png" });
+  formData.append("media", blob, fileName);
+  formData.append("type", type);
+
+  const response = await fetch(
+    `https://oapi.dingtalk.com/media/upload?access_token=${accessToken}`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+
+  const result = (await response.json()) as {
+    errcode?: number;
+    errmsg?: string;
+    media_id?: string;
+  };
+
+  if (result.errcode === 0 && result.media_id) {
+    // 构造公网可访问的 URL
+    const photoURL = `https://oapi.dingtalk.com/media/downloadFile?access_token=${accessToken}&media_id=${result.media_id}`;
+    return {
+      mediaId: result.media_id,
+      url: photoURL,
+    };
+  }
+
+  throw new Error(`上传媒体文件失败: ${result.errmsg ?? JSON.stringify(result)}`);
+}
+
+/**
+ * 发送单聊图片消息
+ * @param userId - 接收者用户 ID
+ * @param photoURL - 图片的公网可访问 URL
+ * @param options - 发送选项
+ */
+export async function sendImageToUser(
+  userId: string,
+  photoURL: string,
+  options: SendMessageOptions
+): Promise<SendMessageResult> {
+  const accessToken = await getAccessToken(options.account);
+  const robotClient = createRobotClient();
+
+  const headers = new robot_1_0.BatchSendOTOHeaders({
+    xAcsDingtalkAccessToken: accessToken,
+  });
+
+  const msgParam = JSON.stringify({ photoURL });
+
+  const request = new robot_1_0.BatchSendOTORequest({
+    robotCode: options.account.clientId,
+    userIds: [userId],
+    msgKey: "sampleImageMsg",
+    msgParam,
+  });
+
+  const response = await robotClient.batchSendOTOWithOptions(
+    request,
+    headers,
+    new $Util.RuntimeOptions({})
+  );
+
+  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-img-${Date.now()}`;
+
+  return {
+    messageId: processQueryKey,
+    chatId: userId,
+  };
+}
+
+/**
+ * 发送群聊图片消息
+ * @param openConversationId - 群会话 ID
+ * @param photoURL - 图片的公网可访问 URL
+ * @param options - 发送选项
+ */
+export async function sendImageToGroup(
+  openConversationId: string,
+  photoURL: string,
+  options: SendMessageOptions
+): Promise<SendMessageResult> {
+  const accessToken = await getAccessToken(options.account);
+  const robotClient = createRobotClient();
+
+  const headers = new robot_1_0.OrgGroupSendHeaders({
+    xAcsDingtalkAccessToken: accessToken,
+  });
+
+  const msgParam = JSON.stringify({ photoURL });
+
+  const request = new robot_1_0.OrgGroupSendRequest({
+    robotCode: options.account.clientId,
+    openConversationId,
+    msgKey: "sampleImageMsg",
+    msgParam,
+  });
+
+  const response = await robotClient.orgGroupSendWithOptions(
+    request,
+    headers,
+    new $Util.RuntimeOptions({})
+  );
+
+  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-img-${Date.now()}`;
+
+  return {
+    messageId: processQueryKey,
+    chatId: openConversationId,
+  };
+}
+
+/**
+ * 发送图片消息（自动判断单聊/群聊）
+ * @param to - 目标 ID（用户 ID 或群会话 ID）
+ * @param photoURL - 图片的公网可访问 URL
+ * @param options - 发送选项
+ */
+export async function sendImageMessage(
+  to: string,
+  photoURL: string,
+  options: SendMessageOptions & {
+    conversationType?: "1" | "2";
+  }
+): Promise<SendMessageResult> {
+  // 根据目标格式判断：群聊 ID 通常是 cid 开头
+  const isGroup = options.conversationType === "2" || to.startsWith("cid");
+
+  if (isGroup) {
+    return sendImageToGroup(to, photoURL, options);
+  }
+  return sendImageToUser(to, photoURL, options);
+}
