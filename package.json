@@ -1,9 +1,8 @@
 {
   "name": "@largezhou/dingtalk",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "OpenClaw DingTalk (钉钉) channel plugin",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "index.ts",
   "type": "module",
   "repository": {
     "type": "git",
@@ -14,15 +13,13 @@
     "url": "https://github.com/largezhou/openclaw-dingtalk/issues"
   },
   "files": [
-    "dist",
+    "src",
+    "index.ts",
     "openclaw.plugin.json",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
-    "demo": "npx tsx demo/demo.ts",
-    "start": "npm run build && node dist/index.js",
-    "dev": "npx tsx watch demo/demo.ts"
+    "demo": "npx tsx demo/demo.ts"
   },
   "keywords": [
     "dingtalk",
@@ -47,11 +44,11 @@
   },
   "peerDependencies": {
     "openclaw": "*",
-    "zod": "^3.0.0 || ^4.0.0"
+    "zod": "^4.0.0"
   },
   "openclaw": {
     "extensions": [
-      "./dist/index.js"
+      "./index.ts"
     ],
     "channel": {
       "id": "dingtalk",
