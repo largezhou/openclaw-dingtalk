@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk";
 import type { DingTalkConfig, ResolvedDingTalkAccount } from "./types.js";
+import { PLUGIN_ID } from "./constants.js";
 
 /**
  * 规范化账户 ID
@@ -16,7 +17,7 @@ export function normalizeAccountId(accountId?: string | null): string {
  * 列出所有钉钉账户 ID
  */
 export function listDingTalkAccountIds(cfg: OpenClawConfig): string[] {
-  const dingtalkConfig = cfg.channels?.dingtalk as DingTalkConfig | undefined;
+  const dingtalkConfig = cfg.channels?.[PLUGIN_ID] as DingTalkConfig | undefined;
   if (!dingtalkConfig) {
     return [];
   }
@@ -55,7 +56,7 @@ export function resolveDingTalkAccount(params: {
 }): ResolvedDingTalkAccount {
   const { cfg, accountId } = params;
   const normalizedId = normalizeAccountId(accountId);
-  const dingtalkConfig = cfg.channels?.dingtalk as DingTalkConfig | undefined;
+  const dingtalkConfig = cfg.channels?.[PLUGIN_ID] as DingTalkConfig | undefined;
 
   // 默认返回值
   const defaultResult: ResolvedDingTalkAccount = {

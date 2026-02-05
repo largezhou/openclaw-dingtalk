@@ -2,6 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { dingtalkPlugin } from "./src/channel.js";
 import { setDingTalkRuntime } from "./src/runtime.js";
+import { PLUGIN_ID } from "./src/constants.js";
 
 const plugin: {
   id: string;
@@ -10,7 +11,7 @@ const plugin: {
   configSchema: ReturnType<typeof emptyPluginConfigSchema>;
   register: (api: OpenClawPluginApi) => void;
 } = {
-  id: "dingtalk",
+  id: PLUGIN_ID,
   name: "DingTalk",
   description: "DingTalk (钉钉) enterprise robot channel plugin",
   configSchema: emptyPluginConfigSchema(),

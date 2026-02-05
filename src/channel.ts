@@ -21,6 +21,7 @@ import { sendTextMessage, sendImageMessage, uploadMedia, probeDingTalkBot, reply
 import { logger } from "./logger.js";
 import { monitorDingTalkProvider } from "./monitor.js";
 import { dingtalkOnboardingAdapter } from "./onboarding.js";
+import { PLUGIN_ID } from "./constants.js";
 
 // ======================= Target Normalization =======================
 
@@ -29,9 +30,9 @@ import { dingtalkOnboardingAdapter } from "./onboarding.js";
  * 支持格式：
  * - 原始用户 ID（非 cid 开头）
  * - 原始群会话 ID（cid 开头）
- * - dingtalk:user:<userId>
- * - dingtalk:group:<conversationId>
- * - dingtalk:<id>
+ * - ddingtalk:user:<userId>
+ * - ddingtalk:group:<conversationId>
+ * - ddingtalk:<id>
  */
 function normalizeDingTalkTarget(target: string): string | undefined {
   const trimmed = target.trim();
@@ -39,11 +40,9 @@ function normalizeDingTalkTarget(target: string): string | undefined {
     return undefined;
   }
 
-  // 去除 dingtalk: 前缀
-  const withoutPrefix = trimmed
-    .replace(/^dingtalk:user:/i, "")
-    .replace(/^dingtalk:group:/i, "")
-    .replace(/^dingtalk:/i, "");
+  // 去除 ddingtalk: 前缀（使用动态正则）
+  const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:|group:)?`, "i");
+  const withoutPrefix = trimmed.replace(prefixPattern, "");
 
   if (!withoutPrefix) {
     return undefined;
@@ -66,26 +65,27 @@ export function isDingTalkGroupId(id: string): boolean {
 
 // DingTalk channel metadata
 const meta = {
-  id: "dingtalk",
+  id: PLUGIN_ID,
   label: "DingTalk",
   selectionLabel: "DingTalk (钉钉 Stream)",
   detailLabel: "钉钉机器人",
-  docsPath: "/channels/dingtalk",
-  docsLabel: "dingtalk",
+  docsPath: `/channels/${PLUGIN_ID}`,
+  docsLabel: PLUGIN_ID,
   blurb: "DingTalk enterprise robot with Stream mode for Chinese market.",
   systemImage: "message.fill",
   aliases: ["dingding", "钉钉"],
 };
 
 export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
-  id: "dingtalk",
+  id: PLUGIN_ID,
   meta,
   onboarding: dingtalkOnboardingAdapter,
   pairing: {
-    idLabel: "dingtalkUserId",
+    idLabel: `${PLUGIN_ID}UserId`,
     normalizeAllowEntry: (entry) => {
       // 钉钉用户 ID 处理：去除前缀
-      return entry.replace(/^dingtalk:(?:user:)?/i, "");
+      const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i");
+      return entry.replace(prefixPattern, "");
     },
     notifyApproval: async ({ cfg, id }) => {
       const account = resolveDingTalkAccount({ cfg });
@@ -105,20 +105,20 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     nativeCommands: false,
     blockStreaming: true, // 钉钉不支持流式消息
   },
-  reload: { configPrefixes: ["channels.dingtalk"] },
+  reload: { configPrefixes: [`channels.${PLUGIN_ID}`] },
   configSchema: buildChannelConfigSchema(DingTalkConfigSchema),
   config: {
     listAccountIds: (cfg) => listDingTalkAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveDingTalkAccount({ cfg, accountId: accountId ?? undefined }),
     defaultAccountId: (cfg) => resolveDefaultDingTalkAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
-      const dingtalkConfig = (cfg.channels?.dingtalk ?? {}) as DingTalkConfig;
+      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
       if (accountId === DEFAULT_ACCOUNT_ID) {
         return {
           ...cfg,
           channels: {
             ...cfg.channels,
-            dingtalk: {
+            [PLUGIN_ID]: {
               ...dingtalkConfig,
               enabled,
             },
@@ -129,7 +129,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         ...cfg,
         channels: {
           ...cfg.channels,
-          dingtalk: {
+          [PLUGIN_ID]: {
             ...dingtalkConfig,
             accounts: {
               ...dingtalkConfig.accounts,
@@ -143,14 +143,14 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       };
     },
     deleteAccount: ({ cfg, accountId }) => {
-      const dingtalkConfig = (cfg.channels?.dingtalk ?? {}) as DingTalkConfig;
+      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
       if (accountId === DEFAULT_ACCOUNT_ID) {
         const { clientId, clientSecret, ...rest } = dingtalkConfig;
         return {
           ...cfg,
           channels: {
             ...cfg.channels,
-            dingtalk: rest,
+            [PLUGIN_ID]: rest,
           },
         };
       }
@@ -160,7 +160,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         ...cfg,
         channels: {
           ...cfg.channels,
-          dingtalk: {
+          [PLUGIN_ID]: {
             ...dingtalkConfig,
             accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
           },
@@ -193,7 +193,8 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       if (!trimmed) {
         return undefined;
       }
-      return trimmed.replace(/^dingtalk:(user|group):/i, "").replace(/^dingtalk:/i, "");
+      const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:|group:)?`, "i");
+      return trimmed.replace(prefixPattern, "");
     },
     targetResolver: {
       looksLikeId: (id) => {
@@ -202,7 +203,8 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
           return false;
         }
         // 钉钉用户 ID 和群会话 ID 的格式
-        return /^[a-zA-Z0-9_-]+$/i.test(trimmed) || /^dingtalk:/i.test(trimmed);
+        const prefixPattern = new RegExp(`^${PLUGIN_ID}:`, "i");
+        return /^[a-zA-Z0-9_-]+$/i.test(trimmed) || prefixPattern.test(trimmed);
       },
       hint: "<userId|conversationId>",
     },
@@ -215,13 +217,13 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) => {
-      const dingtalkConfig = (cfg.channels?.dingtalk ?? {}) as DingTalkConfig;
+      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
       if (accountId === DEFAULT_ACCOUNT_ID) {
         return {
           ...cfg,
           channels: {
             ...cfg.channels,
-            dingtalk: {
+            [PLUGIN_ID]: {
               ...dingtalkConfig,
               name,
             },
@@ -232,7 +234,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         ...cfg,
         channels: {
           ...cfg.channels,
-          dingtalk: {
+          [PLUGIN_ID]: {
             ...dingtalkConfig,
             accounts: {
               ...dingtalkConfig.accounts,
@@ -264,14 +266,14 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         clientId?: string;
         clientSecret?: string;
       };
-      const dingtalkConfig = (cfg.channels?.dingtalk ?? {}) as DingTalkConfig;
+      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
 
       if (accountId === DEFAULT_ACCOUNT_ID) {
         return {
           ...cfg,
           channels: {
             ...cfg.channels,
-            dingtalk: {
+            [PLUGIN_ID]: {
               ...dingtalkConfig,
               enabled: true,
               ...(typedInput.name ? { name: typedInput.name } : {}),
@@ -286,7 +288,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         ...cfg,
         channels: {
           ...cfg.channels,
-          dingtalk: {
+          [PLUGIN_ID]: {
             ...dingtalkConfig,
             enabled: true,
             accounts: {
@@ -313,7 +315,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
      * 支持以下格式：
      * - 用户 ID：直接是用户的 staffId（非 cid 开头）
      * - 群会话 ID：以 cid 开头的 openConversationId
-     * - 带前缀格式：dingtalk:user:<userId> 或 dingtalk:group:<conversationId>
+     * - 带前缀格式：ddingtalk:user:<userId> 或 ddingtalk:group:<conversationId>
      */
     resolveTarget: ({ to, allowFrom, mode }) => {
       const trimmed = to?.trim() ?? "";
@@ -337,7 +339,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
             ok: false,
             error: missingTargetError(
               "DingTalk",
-              "<userId|cid开头的conversationId> 或 channels.dingtalk.allowFrom[0]",
+              `<userId|cid开头的conversationId> 或 channels.${PLUGIN_ID}.allowFrom[0]`,
             ),
           };
         }
@@ -371,14 +373,14 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         ok: false,
         error: missingTargetError(
           "DingTalk",
-          "<userId|cid开头的conversationId> 或 channels.dingtalk.allowFrom[0]",
+          `<userId|cid开头的conversationId> 或 channels.${PLUGIN_ID}.allowFrom[0]`,
         ),
       };
     },
     sendText: async ({ to, text, accountId, cfg }) => {
       const account = resolveDingTalkAccount({ cfg, accountId: accountId ?? undefined });
       const result = await sendTextMessage(to, text, { account });
-      return { channel: "dingtalk", ...result };
+      return { channel: PLUGIN_ID, ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
       const account = resolveDingTalkAccount({ cfg, accountId: accountId ?? undefined });
@@ -406,19 +408,19 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
             await sendTextMessage(to, text, { account });
           }
 
-          return { channel: "dingtalk", ...imageResult };
+          return { channel: PLUGIN_ID, ...imageResult };
         } catch (err) {
           logger.error("发送图片失败:", err);
           // 降级：发送文本消息附带链接
           const fallbackText = text ? `${text}\n\n📎 图片: ${mediaUrl}` : `📎 图片: ${mediaUrl}`;
           const result = await sendTextMessage(to, fallbackText, { account });
-          return { channel: "dingtalk", ...result };
+          return { channel: PLUGIN_ID, ...result };
         }
       }
 
       // 没有媒体，只发送文本
       const result = await sendTextMessage(to, text ?? "", { account });
-      return { channel: "dingtalk", ...result };
+      return { channel: PLUGIN_ID, ...result };
     },
   },
   status: {
@@ -436,7 +438,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         // Check if configured flag is false
         if (!account.configured) {
           issues.push({
-            channel: "dingtalk",
+            channel: PLUGIN_ID,
             accountId,
             kind: "config",
             message: "DingTalk credentials (clientId/clientSecret) not configured",
@@ -508,7 +510,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     },
     logoutAccount: async ({ accountId, cfg }) => {
       const nextCfg = { ...cfg } as OpenClawConfig;
-      const dingtalkConfig = (cfg.channels?.dingtalk ?? {}) as DingTalkConfig;
+      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
       const nextDingTalk = { ...dingtalkConfig };
       let cleared = false;
       let changed = false;
@@ -559,10 +561,10 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
 
       if (changed) {
         if (Object.keys(nextDingTalk).length > 0) {
-          nextCfg.channels = { ...nextCfg.channels, dingtalk: nextDingTalk };
+          nextCfg.channels = { ...nextCfg.channels, [PLUGIN_ID]: nextDingTalk };
         } else {
           const nextChannels = { ...nextCfg.channels };
-          delete (nextChannels as Record<string, unknown>).dingtalk;
+          delete (nextChannels as Record<string, unknown>)[PLUGIN_ID];
           if (Object.keys(nextChannels).length > 0) {
             nextCfg.channels = nextChannels;
           } else {

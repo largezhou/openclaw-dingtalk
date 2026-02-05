@@ -8,8 +8,9 @@ import {
   resolveDefaultDingTalkAccountId,
   resolveDingTalkAccount,
 } from "./accounts.js";
+import { PLUGIN_ID } from "./constants.js";
 
-const channel = "dingtalk" as const;
+const channel = PLUGIN_ID;
 
 /**
  * Display DingTalk credentials configuration help
@@ -52,7 +53,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     prompter,
     accountOverrides,
   }) => {
-    const dingtalkOverride = (accountOverrides as Record<string, string | undefined>).dingtalk?.trim();
+    const dingtalkOverride = (accountOverrides as Record<string, string | undefined>)[PLUGIN_ID]?.trim();
     const defaultDingTalkAccountId = resolveDefaultDingTalkAccountId(cfg);
     // 直接使用 override 或默认账户 ID，不再提示用户输入
     const dingtalkAccountId = dingtalkOverride
@@ -67,7 +68,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     const accountConfigured = Boolean(
       resolvedAccount.clientId?.trim() && resolvedAccount.clientSecret?.trim()
     );
-    const dingtalkConfig = (next.channels?.dingtalk ?? {}) as DingTalkConfig;
+    const dingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
     const hasConfigCredentials = Boolean(dingtalkConfig.clientId);
 
     let clientId: string | null = null;
@@ -112,13 +113,13 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     if (clientId && clientSecret) {
-      const updatedDingtalkConfig = (next.channels?.dingtalk ?? {}) as DingTalkConfig;
+      const updatedDingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
       if (dingtalkAccountId === DEFAULT_ACCOUNT_ID) {
         next = {
           ...next,
           channels: {
             ...next.channels,
-            dingtalk: {
+            [PLUGIN_ID]: {
               ...updatedDingtalkConfig,
               enabled: true,
               clientId,
@@ -131,7 +132,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
           ...next,
           channels: {
             ...next.channels,
-            dingtalk: {
+            [PLUGIN_ID]: {
               ...updatedDingtalkConfig,
               enabled: true,
               accounts: {
@@ -153,12 +154,12 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     return { cfg: next, accountId: dingtalkAccountId };
   },
   disable: (cfg) => {
-    const dingtalkConfig = (cfg.channels?.dingtalk ?? {}) as DingTalkConfig;
+    const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
     return {
       ...cfg,
       channels: {
         ...cfg.channels,
-        dingtalk: { ...dingtalkConfig, enabled: false },
+        [PLUGIN_ID]: { ...dingtalkConfig, enabled: false },
       },
     };
   },

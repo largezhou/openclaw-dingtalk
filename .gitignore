@@ -6,3 +6,5 @@ tmp
 dist
 /*.tgz
 CODEBUDDY.md
+.idea
+.vscode

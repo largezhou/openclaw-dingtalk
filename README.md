@@ -1,4 +1,4 @@
-# @largezhou/dingtalk
+# @largezhou/ddingtalk
 
 OpenClaw 钉钉（DingTalk）渠道插件，使用 Stream 模式接入企业机器人。
 
@@ -36,8 +36,9 @@ openclaw plugins install https://github.com/largezhou/openclaw-dingtalk.git
 ### 3. 配置应用权限
 
 在应用的权限管理中，确保开通以下权限：
+
 - 企业内机器人发送消息权限
-- 根据downloadCode获取机器人接收消息的下载链接（用于接收图片）
+- 根据 downloadCode 获取机器人接收消息的下载链接（用于接收图片）
 
 ## 配置
 
@@ -51,14 +52,18 @@ openclaw channels add
 
 ### 方式二：手动配置
 
-在 OpenClaw 配置文件 `~/.openclaw/config.yaml` 中添加：
+在 OpenClaw 配置文件 `~/.openclaw/openclaw.json` 中添加：
 
-```yaml
-channels:
-  dingtalk:
-    enabled: true
-    clientId: "your_app_key"
-    clientSecret: "your_app_secret"
+```json
+{
+   "channels": {
+     "ddingtalk": {
+        "enabled": true,
+        "clientId": "your_app_key",
+        "clientSecret": "your_app_secret"
+     }
+   }
+}
 ```
 
 ## Demo
