@@ -2,6 +2,7 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   loadWebMedia,
+  missingTargetError,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type ChannelAccountSnapshot,
@@ -17,8 +18,51 @@ import {
 } from "./accounts.js";
 import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount } from "./types.js";
 import { sendTextMessage, sendImageMessage, uploadMedia, probeDingTalkBot, replyViaWebhook } from "./client.js";
+import { logger } from "./logger.js";
 import { monitorDingTalkProvider } from "./monitor.js";
 import { dingtalkOnboardingAdapter } from "./onboarding.js";
+
+// ======================= Target Normalization =======================
+
+/**
+ * 标准化钉钉发送目标
+ * 支持格式：
+ * - 原始用户 ID（非 cid 开头）
+ * - 原始群会话 ID（cid 开头）
+ * - dingtalk:user:<userId>
+ * - dingtalk:group:<conversationId>
+ * - dingtalk:<id>
+ */
+function normalizeDingTalkTarget(target: string): string | undefined {
+  const trimmed = target.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  // 去除 dingtalk: 前缀
+  const withoutPrefix = trimmed
+    .replace(/^dingtalk:user:/i, "")
+    .replace(/^dingtalk:group:/i, "")
+    .replace(/^dingtalk:/i, "");
+
+  if (!withoutPrefix) {
+    return undefined;
+  }
+
+  // 验证格式：钉钉 ID 一般是字母数字组合
+  if (/^[a-zA-Z0-9_$+-]+$/i.test(withoutPrefix)) {
+    return withoutPrefix;
+  }
+
+  return undefined;
+}
+
+/**
+ * 判断是否是钉钉群会话 ID
+ */
+export function isDingTalkGroupId(id: string): boolean {
+  return id.startsWith("cid");
+}
 
 // DingTalk channel metadata
 const meta = {
@@ -264,6 +308,73 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     deliveryMode: "direct",
     chunker: (text, limit) => getDingTalkRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: 4000, // 钉钉文本消息长度限制
+    /**
+     * 解析发送目标
+     * 支持以下格式：
+     * - 用户 ID：直接是用户的 staffId（非 cid 开头）
+     * - 群会话 ID：以 cid 开头的 openConversationId
+     * - 带前缀格式：dingtalk:user:<userId> 或 dingtalk:group:<conversationId>
+     */
+    resolveTarget: ({ to, allowFrom, mode }) => {
+      const trimmed = to?.trim() ?? "";
+      const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+      const hasWildcard = allowListRaw.includes("*");
+      const allowList = allowListRaw
+        .filter((entry) => entry !== "*")
+        .map((entry) => normalizeDingTalkTarget(entry))
+        .filter((entry): entry is string => Boolean(entry));
+
+      // 有指定目标
+      if (trimmed) {
+        const normalizedTo = normalizeDingTalkTarget(trimmed);
+
+        if (!normalizedTo) {
+          // 目标格式无效，尝试使用 allowList 的第一个
+          if ((mode === "implicit" || mode === "heartbeat") && allowList.length > 0) {
+            return { ok: true, to: allowList[0] };
+          }
+          return {
+            ok: false,
+            error: missingTargetError(
+              "DingTalk",
+              "<userId|cid开头的conversationId> 或 channels.dingtalk.allowFrom[0]",
+            ),
+          };
+        }
+
+        // 显式模式或通配符模式，直接返回
+        if (mode === "explicit") {
+          return { ok: true, to: normalizedTo };
+        }
+
+        // 隐式/心跳模式：检查 allowList
+        if (mode === "implicit" || mode === "heartbeat") {
+          if (hasWildcard || allowList.length === 0) {
+            return { ok: true, to: normalizedTo };
+          }
+          if (allowList.includes(normalizedTo)) {
+            return { ok: true, to: normalizedTo };
+          }
+          // 不在 allowList 中，使用第一个
+          return { ok: true, to: allowList[0] };
+        }
+
+        return { ok: true, to: normalizedTo };
+      }
+
+      // 没有指定目标，尝试使用 allowList 的第一个
+      if (allowList.length > 0) {
+        return { ok: true, to: allowList[0] };
+      }
+
+      return {
+        ok: false,
+        error: missingTargetError(
+          "DingTalk",
+          "<userId|cid开头的conversationId> 或 channels.dingtalk.allowFrom[0]",
+        ),
+      };
+    },
     sendText: async ({ to, text, accountId, cfg }) => {
       const account = resolveDingTalkAccount({ cfg, accountId: accountId ?? undefined });
       const result = await sendTextMessage(to, text, { account });
@@ -275,20 +386,20 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       // 如果有媒体 URL，尝试发送图片
       if (mediaUrl) {
         try {
-          console.log(`[DingTalk] 准备发送图片: ${mediaUrl}`);
+          logger.log(`准备发送图片: ${mediaUrl}`);
 
           // 使用 OpenClaw 的 loadWebMedia 加载媒体（支持 URL、本地路径、file://、~ 等）
           const media = await loadWebMedia(mediaUrl);
-          console.log(`[DingTalk] 加载图片成功，大小: ${(media.buffer.length / 1024).toFixed(2)} KB`);
+          logger.log(`加载图片成功，大小: ${(media.buffer.length / 1024).toFixed(2)} KB`);
 
           // 上传到钉钉
           const fileName = media.fileName || path.basename(mediaUrl) || `image_${Date.now()}.png`;
           const uploadResult = await uploadMedia(media.buffer, fileName, account);
-          console.log(`[DingTalk] 上传图片成功，photoURL: ${uploadResult.url}`);
+          logger.log(`上传图片成功，photoURL: ${uploadResult.url}`);
 
           // 发送图片消息
           const imageResult = await sendImageMessage(to, uploadResult.url, { account });
-          console.log(`[DingTalk] 发送图片消息成功`);
+          logger.log(`发送图片消息成功`);
 
           // 如果有文本，再发送文本消息
           if (text?.trim()) {
@@ -297,7 +408,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
 
           return { channel: "dingtalk", ...imageResult };
         } catch (err) {
-          console.error("[DingTalk] 发送图片失败:", err);
+          logger.error("发送图片失败:", err);
           // 降级：发送文本消息附带链接
           const fallbackText = text ? `${text}\n\n📎 图片: ${mediaUrl}` : `📎 图片: ${mediaUrl}`;
           const result = await sendTextMessage(to, fallbackText, { account });
