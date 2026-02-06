@@ -7,6 +7,228 @@ import { getDingTalkRuntime } from "./runtime.js";
 import { logger } from "./logger.js";
 import { PLUGIN_ID } from "./constants.js";
 
+// ============================================================================
+// 媒体信息类型定义
+// ============================================================================
+
+/** 媒体类型枚举（与钉钉消息类型一致） */
+export type MediaKind = "picture" | "audio" | "video" | "file";
+
+/** 单个媒体项 */
+export interface MediaItem {
+  /** 媒体类型 */
+  kind: MediaKind;
+  /** 本地文件路径 */
+  path: string;
+  /** MIME 类型 */
+  contentType: string;
+  /** 文件名（可选） */
+  fileName?: string;
+  /** 文件大小（字节） */
+  fileSize?: number;
+  /** 时长（秒，音视频专用） */
+  duration?: number;
+}
+
+/** 入站消息的媒体上下文 */
+export interface InboundMediaContext {
+  /** 媒体项列表（支持多媒体混排） */
+  items: MediaItem[];
+  /** 主媒体（第一个媒体项，兼容旧逻辑） */
+  primary?: MediaItem;
+}
+
+/** 生成媒体占位符文本 */
+function generateMediaPlaceholder(media: InboundMediaContext): string {
+  if (media.items.length === 0) return "";
+
+  return media.items
+    .map((item) => {
+      switch (item.kind) {
+        case "picture":
+          return "<media:picture>";
+        case "audio":
+          return `<media:audio${item.duration ? ` duration=${item.duration}s` : ""}>`;
+        case "video":
+          return `<media:video${item.duration ? ` duration=${item.duration}s` : ""}>`;
+        case "file":
+          return `<media:file${item.fileName ? ` name="${item.fileName}"` : ""}>`;
+        default:
+          return `<media:${item.kind}>`;
+      }
+    })
+    .join(" ");
+}
+
+/** 从 InboundMediaContext 构建上下文的媒体字段 */
+function buildMediaContextFields(media?: InboundMediaContext): Record<string, unknown> {
+  if (!media || media.items.length === 0) {
+    return {};
+  }
+
+  const primary = media.primary ?? media.items[0];
+
+  // 基础字段（兼容旧逻辑，使用主媒体）
+  const baseFields: Record<string, unknown> = {
+    MediaPath: primary.path,
+    MediaType: primary.contentType,
+    MediaUrl: primary.path,
+  };
+
+  // 如果有多个媒体项，添加扩展字段
+  if (media.items.length > 1) {
+    baseFields.MediaItems = media.items;
+  }
+
+  // 根据主媒体类型添加特定字段
+  if (primary.kind === "audio" || primary.kind === "video") {
+    if (primary.duration !== undefined) {
+      baseFields.MediaDuration = primary.duration;
+    }
+  }
+
+  if (primary.kind === "file") {
+    if (primary.fileName) {
+      baseFields.MediaFileName = primary.fileName;
+    }
+    if (primary.fileSize !== undefined) {
+      baseFields.MediaFileSize = primary.fileSize;
+    }
+  }
+
+  return baseFields;
+}
+
+// ============================================================================
+// 消息处理器类型定义
+// ============================================================================
+
+/** 消息处理结果 */
+interface MessageHandleResult {
+  /** 是否成功处理 */
+  success: boolean;
+  /** 媒体上下文（支持多媒体混排） */
+  media?: InboundMediaContext;
+  /** 错误信息 */
+  errorMessage?: string;
+  /** 是否需要跳过后续处理 */
+  skipProcessing?: boolean;
+}
+
+/** 消息处理器接口 */
+interface MessageHandler {
+  /** 是否能处理该消息类型 */
+  canHandle(data: DingTalkMessageData): boolean;
+  /** 获取消息预览（用于日志） */
+  getPreview(data: DingTalkMessageData): string;
+  /** 校验消息 */
+  validate(data: DingTalkMessageData): { valid: boolean; errorMessage?: string };
+  /** 处理消息 */
+  handle(data: DingTalkMessageData, account: ResolvedDingTalkAccount): Promise<MessageHandleResult>;
+}
+
+// ============================================================================
+// 消息处理器实现
+// ============================================================================
+
+/** 文本消息处理器 */
+const textMessageHandler: MessageHandler = {
+  canHandle: (data) => data.msgtype === "text",
+
+  getPreview: (data) => {
+    const text = data.text?.content?.trim() ?? "";
+    return text.slice(0, 50) + (text.length > 50 ? "..." : "");
+  },
+
+  validate: (data) => {
+    const text = data.text?.content?.trim() ?? "";
+    if (!text) {
+      return { valid: false, errorMessage: undefined }; // 空消息静默忽略，不需要回复错误
+    }
+    return { valid: true };
+  },
+
+  handle: async () => {
+    // 文本消息不需要预处理，直接返回成功
+    return { success: true };
+  },
+};
+
+/** 图片消息处理器 */
+const pictureMessageHandler: MessageHandler = {
+  canHandle: (data) => data.msgtype === "picture",
+
+  getPreview: () => "[图片]",
+
+  validate: (data) => {
+    const downloadCode = data.content?.downloadCode;
+    if (!downloadCode) {
+      return { valid: false, errorMessage: "图片处理失败：缺少下载码" };
+    }
+    return { valid: true };
+  },
+
+  handle: async (data, account) => {
+    const downloadCode = data.content?.downloadCode!;
+    const saved = await downloadAndSaveImage(downloadCode, account);
+
+    if (!saved) {
+      return { success: false, errorMessage: "图片处理失败，请稍后重试" };
+    }
+
+    // 构建媒体上下文
+    const mediaItem: MediaItem = {
+      kind: "picture",
+      path: saved.path,
+      contentType: saved.contentType,
+    };
+
+    return {
+      success: true,
+      media: {
+        items: [mediaItem],
+        primary: mediaItem,
+      },
+    };
+  },
+};
+
+/** 不支持的消息类型处理器 */
+const unsupportedMessageHandler: MessageHandler = {
+  canHandle: () => true, // 作为兜底处理器
+
+  getPreview: (data) => `[${data.msgtype}]`,
+
+  validate: () => ({
+    valid: false,
+    errorMessage: "暂不支持该类型消息，请发送文本或图片消息。",
+  }),
+
+  handle: async () => {
+    return { success: false, skipProcessing: true };
+  },
+};
+
+/** 消息处理器注册表（按优先级排序） */
+const messageHandlers: MessageHandler[] = [
+  textMessageHandler,
+  pictureMessageHandler,
+  unsupportedMessageHandler, // 兜底处理器必须放在最后
+];
+
+/** 获取消息处理器 */
+function getMessageHandler(data: DingTalkMessageData): MessageHandler {
+  return messageHandlers.find((h) => h.canHandle(data))!;
+}
+
+/** 通过 webhook 发送错误回复（静默失败） */
+function replyError(webhook: string | undefined, message: string | undefined): void {
+  if (!webhook || !message) return;
+  replyViaWebhook(webhook, message).catch((err) => {
+    logger.error("回复错误提示失败:", err);
+  });
+}
+
 export interface MonitorOptions {
   clientId: string;
   clientSecret: string;
@@ -126,118 +348,149 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     debug: false,
   });
 
-  // 异步处理消息（不阻塞钉钉响应）
-  const processMessageAsync = async (
+  // ============================================================================
+  // 消息处理核心逻辑
+  // ============================================================================
+
+  /** 构建发送者信息 */
+  const buildSenderInfo = (data: DingTalkMessageData) => {
+    const senderId = data.senderStaffId;
+    const senderName = data.senderNick;
+    const chatId = senderId; // 单聊用 senderId 作为 chatId
+
+    return {
+      senderId,
+      senderName,
+      chatId,
+      fromAddress: `${PLUGIN_ID}:${senderId}`,
+      toAddress: `${PLUGIN_ID}:${senderId}`,
+      label: senderName || senderId,
+    };
+  };
+
+  /** 构建消息体内容 */
+  const buildMessageBody = (data: DingTalkMessageData, media?: InboundMediaContext) => {
+    const textContent = data.text?.content?.trim() ?? "";
+    const mediaPlaceholder = media ? generateMediaPlaceholder(media) : "";
+
+    // 优先使用文本内容，如果没有则使用媒体占位符
+    const rawBody = textContent || mediaPlaceholder;
+
+    return { textContent, rawBody };
+  };
+
+  /** 构建入站消息上下文 */
+  const buildInboundContext = (
     data: DingTalkMessageData,
-    mediaInfo?: { path: string; contentType: string }
+    sender: ReturnType<typeof buildSenderInfo>,
+    rawBody: string,
+    media?: InboundMediaContext
   ) => {
-    try {
-      // 构建消息上下文（仅支持单聊）
-      const senderId = data.senderStaffId;
-      const senderName = data.senderNick;
+    // 解析路由
+    const route = pluginRuntime.channel.routing.resolveAgentRoute({
+      cfg: config,
+      channel: PLUGIN_ID,
+      accountId,
+      peer: { kind: "dm", id: sender.chatId },
+    });
 
-      // 单聊用 senderId 作为 chatId
-      const chatId = senderId;
+    // 格式化入站消息体
+    const envelopeOptions = pluginRuntime.channel.reply.resolveEnvelopeFormatOptions(config);
+    const body = pluginRuntime.channel.reply.formatInboundEnvelope({
+      channel: "DingTalk",
+      from: sender.label,
+      timestamp: parseInt(data.createAt),
+      body: rawBody,
+      chatType: "direct",
+      sender: {
+        id: sender.senderId,
+        name: sender.senderName,
+      },
+      envelope: envelopeOptions,
+    });
 
-      // 文本内容：如果是图片消息，使用占位符
-      const textContent = data.text?.content?.trim() ?? "";
-      const rawBody = textContent || (mediaInfo ? "<media:image>" : "");
+    // 构建基础上下文
+    const baseContext = {
+      Body: body,
+      RawBody: rawBody,
+      CommandBody: rawBody,
+      From: sender.fromAddress,
+      To: sender.toAddress,
+      SessionKey: route.sessionKey,
+      AccountId: accountId,
+      ChatType: "direct" as const,
+      ConversationLabel: sender.label,
+      SenderId: sender.senderId,
+      SenderName: sender.senderName,
+      Provider: PLUGIN_ID,
+      Surface: PLUGIN_ID,
+      MessageSid: data.msgId,
+      Timestamp: parseInt(data.createAt),
+      WasMentioned: data.isInAtList,
+      OriginatingChannel: PLUGIN_ID,
+      OriginatingTo: sender.toAddress,
+    };
 
-      // 构建 From/To 地址
-      const fromAddress = `${PLUGIN_ID}:${senderId}`;
-      const toAddress = fromAddress;
+    // 合并媒体字段
+    const mediaFields = buildMediaContextFields(media);
 
-      // 解析路由（需要先解析路由才能获取 sessionKey）
-      const route = pluginRuntime.channel.routing.resolveAgentRoute({
-        cfg: config,
+    return pluginRuntime.channel.reply.finalizeInboundContext({
+      ...baseContext,
+      ...mediaFields,
+    });
+  };
+
+  /** 创建回复分发器 */
+  const createReplyDispatcher = (data: DingTalkMessageData) => ({
+    deliver: async (payload: { text?: string }) => {
+      const replyText = payload.text ?? "";
+      if (!replyText) return;
+
+      if (data.sessionWebhook) {
+        const result = await replyViaWebhook(data.sessionWebhook, replyText);
+        if (result.errcode !== 0) {
+          throw new Error(`回复失败: ${result.errmsg}`);
+        }
+      } else {
+        logger.warn("sessionWebhook 不存在，无法回复消息");
+      }
+
+      recordChannelRuntimeState({
         channel: PLUGIN_ID,
         accountId,
-        peer: {
-          kind: "dm",
-          id: chatId,
-        },
+        state: { lastOutboundAt: Date.now() },
       });
+    },
+    onError: (err: unknown, info: { kind: string }) => {
+      logger.error(`${info.kind} reply failed:`, err);
+    },
+  });
 
-      // 格式化入站消息体
-      const envelopeOptions = pluginRuntime.channel.reply.resolveEnvelopeFormatOptions(config);
-      const body = pluginRuntime.channel.reply.formatInboundEnvelope({
-        channel: "DingTalk",
-        from: senderName || senderId,
-        timestamp: parseInt(data.createAt),
-        body: rawBody,
-        chatType: "direct",
-        sender: {
-          id: senderId,
-          name: senderName,
-        },
-        envelope: envelopeOptions,
-      });
+  /** 异步处理消息（不阻塞钉钉响应） */
+  const processMessageAsync = async (
+    data: DingTalkMessageData,
+    media?: InboundMediaContext
+  ) => {
+    try {
+      // 1. 构建发送者信息
+      const sender = buildSenderInfo(data);
 
-      // 构建消息上下文，包含图片信息
-      const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
-        Body: body,
-        RawBody: rawBody,
-        CommandBody: rawBody,
-        From: fromAddress,
-        To: toAddress,
-        SessionKey: route.sessionKey,
-        AccountId: accountId,
-        ChatType: "direct",
-        ConversationLabel: senderName || senderId,
-        SenderId: senderId,
-        SenderName: senderName,
-        Provider: PLUGIN_ID,
-        Surface: PLUGIN_ID,
-        MessageSid: data.msgId,
-        Timestamp: parseInt(data.createAt),
-        WasMentioned: data.isInAtList,
-        OriginatingChannel: PLUGIN_ID,
-        OriginatingTo: toAddress,
-        // 添加图片媒体信息
-        MediaPath: mediaInfo?.path,
-        MediaType: mediaInfo?.contentType,
-        MediaUrl: mediaInfo?.path,
-      });
+      // 2. 构建消息体
+      const { rawBody } = buildMessageBody(data, media);
 
-      // 调用 OpenClaw 的消息分发
+      // 3. 构建入站上下文
+      const ctxPayload = buildInboundContext(data, sender, rawBody, media);
+
+      // 4. 分发消息给 OpenClaw
       const { queuedFinal } = await pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: ctxPayload,
         cfg: config,
-        dispatcherOptions: {
-          deliver: async (payload) => {
-            const replyText = payload.text ?? "";
-            if (!replyText) {
-              return;
-            }
-
-            // 使用 sessionWebhook 回复消息
-            if (data.sessionWebhook) {
-              const result = await replyViaWebhook(data.sessionWebhook, replyText);
-              if (result.errcode !== 0) {
-                throw new Error(`回复失败: ${result.errmsg}`);
-              }
-            } else {
-              logger.warn("sessionWebhook 不存在，无法回复消息");
-            }
-
-            // Record outbound activity
-            recordChannelRuntimeState({
-              channel: PLUGIN_ID,
-              accountId,
-              state: {
-                lastOutboundAt: Date.now(),
-              },
-            });
-          },
-          onError: (err, info) => {
-            logger.error(`${info.kind} reply failed:`, err);
-          },
-        },
+        dispatcherOptions: createReplyDispatcher(data),
         replyOptions: {},
       });
 
       if (!queuedFinal) {
-        logger.log(`no response generated for message from ${senderName || senderId}`);
+        logger.log(`no response generated for message from ${sender.label}`);
       }
     } catch (error) {
       logger.error("异步处理消息出错:", error);
@@ -263,86 +516,46 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         return;
       }
 
-      // 打印收到的消息信息（单行格式）
-      const textContent = data.text?.content?.trim() ?? "";
-      const contentPreview = data.msgtype === "text"
-        ? (textContent.slice(0, 50) || "") + (textContent.length > 50 ? "..." : "")
-        : data.msgtype === "picture"
-          ? `[图片]`
-          : `[${data.msgtype}]`;
-      logger.log(`收到消息 | 单聊 | ${data.senderNick}(${data.senderStaffId}) | ${contentPreview}`);
+      // 获取消息处理器
+      const handler = getMessageHandler(data);
 
-      // Record inbound activity
+      // 打印收到的消息信息（单行格式）
+      const preview = handler.getPreview(data);
+      logger.log(`收到消息 | 单聊 | ${data.senderNick}(${data.senderStaffId}) | ${preview}`);
+
+      // 记录入站活动
       recordChannelRuntimeState({
         channel: PLUGIN_ID,
         accountId,
-        state: {
-          lastInboundAt: Date.now(),
-        },
+        state: { lastInboundAt: Date.now() },
       });
 
       // 立即返回成功响应给钉钉服务器，避免超时
       client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
 
-      // 处理图片消息
-      if (data.msgtype === "picture") {
-        logger.log(`收到图片消息，发送者: ${data.senderNick}`);
+      // 校验消息
+      const validation = handler.validate(data);
+      if (!validation.valid) {
+        replyError(data.sessionWebhook, validation.errorMessage);
+        return;
+      }
 
-        const downloadCode = data.content?.downloadCode;
-        if (!downloadCode) {
-          logger.log("图片消息缺少 downloadCode");
-          if (data.sessionWebhook) {
-            replyViaWebhook(data.sessionWebhook, "图片处理失败：缺少下载码").catch((err) => {
-              logger.error("回复图片错误提示失败:", err);
-            });
+      // 异步处理消息
+      handler.handle(data, account)
+        .then((result) => {
+          if (!result.success) {
+            replyError(data.sessionWebhook, result.errorMessage);
+            return;
           }
-          return;
-        }
-
-        // 异步下载并处理图片
-        downloadAndSaveImage(downloadCode, account)
-          .then((mediaInfo) => {
-            if (mediaInfo) {
-              // 处理带图片的消息
-              processMessageAsync(data, mediaInfo).catch((err) => {
-                logger.error("处理图片消息失败:", err);
-              });
-            } else {
-              // 图片下载/保存失败
-              if (data.sessionWebhook) {
-                replyViaWebhook(data.sessionWebhook, "图片处理失败，请稍后重试").catch((err) => {
-                  logger.error("回复图片错误提示失败:", err);
-                });
-              }
-            }
-          })
-          .catch((err) => {
-            logger.error("下载图片失败:", err);
-          });
-        return;
-      }
-
-      // 处理文本消息
-      if (data.msgtype === "text") {
-        const textContent = data.text?.content?.trim() ?? "";
-
-        if (!textContent) {
-          return;
-        }
-
-        // 异步处理消息（不阻塞）
-        processMessageAsync(data).catch((err) => {
-          logger.error("异步处理消息失败:", err);
+          if (result.skipProcessing) {
+            return;
+          }
+          // 分发消息给 OpenClaw
+          return processMessageAsync(data, result.media);
+        })
+        .catch((err) => {
+          logger.error(`处理 ${data.msgtype} 消息失败:`, err);
         });
-        return;
-      }
-
-      // 不支持的消息类型
-      if (data.sessionWebhook) {
-        replyViaWebhook(data.sessionWebhook, "暂不支持该类型消息，请发送文本或图片消息。").catch((err) => {
-          logger.error("回复非支持消息提示失败:", err);
-        });
-      }
     } catch (error) {
       logger.error("解析消息出错:", error);
       recordChannelRuntimeState({
