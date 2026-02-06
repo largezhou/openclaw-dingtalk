@@ -27,6 +27,55 @@ export interface TextContent {
 export interface PictureContent {
   downloadCode?: string;
   pictureDownloadCode?: string;
+  height?: number;
+  width?: number;
+  extension?: string;
+}
+
+// 富文本消息内容 - 单个元素
+export interface RichTextElement {
+  type?: 'text' | 'picture';  // text 时可能没有 type 字段
+  text?: string;              // type 为 text 时
+  downloadCode?: string;      // type 为 picture 时
+  pictureDownloadCode?: string;  // 图片下载码（备选字段）
+  height?: number;
+  width?: number;
+  extension?: string;
+}
+
+// 富文本消息内容
+export interface RichTextContent {
+  richText: RichTextElement[];
+}
+
+// 音频消息内容
+export interface AudioContent {
+  downloadCode?: string;
+  duration?: number;      // 语音时长（毫秒）
+  extension?: string;     // 文件扩展名，如 amr
+  mediaId?: string;
+  recognition?: string;   // 语音转文字结果
+}
+
+// 视频消息内容
+export interface VideoContent {
+  downloadCode?: string;
+  duration?: number;      // 视频时长（毫秒）
+  extension?: string;     // 文件扩展名，如 mp4
+  mediaId?: string;
+  videoType?: string;
+  width?: number;
+  height?: number;
+}
+
+// 文件消息内容
+export interface FileContent {
+  downloadCode?: string;
+  fileName?: string;      // 文件名
+  fileSize?: number;      // 文件大小（字节）
+  extension?: string;     // 文件扩展名
+  spaceId?: string;
+  mediaId?: string;
 }
 
 // @ 配置
@@ -52,8 +101,11 @@ export interface RobotMessageData {
   isInAtList: boolean;
   sessionWebhook?: string;
   sessionWebhookExpiredTime?: string;
+  // 文本消息
   text?: TextContent;
-  content?: PictureContent;
+  // 图片消息（content 字段）
+  content?: PictureContent | RichTextContent | AudioContent | VideoContent | FileContent;
+  // atUsers 列表
   atUsers?: Array<{
     dingtalkId: string;
     staffId?: string;

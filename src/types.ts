@@ -3,44 +3,19 @@ import { z } from "zod";
 // ======================= DingTalk Config Schema =======================
 
 /**
- * 钉钉账户配置 Schema
- */
-export const DingTalkAccountConfigSchema = z.object({
-  /** 账户名称 */
-  name: z.string().optional(),
-  /** 是否启用 */
-  enabled: z.boolean().optional(),
-  /** 钉钉应用 AppKey (Client ID) */
-  clientId: z.string().optional(),
-  /** 钉钉应用 AppSecret (Client Secret) */
-  clientSecret: z.string().optional(),
-  /** 群组配置 */
-  groups: z.record(z.string(), z.object({
-    requireMention: z.boolean().optional(),
-  })).optional(),
-});
-
-/**
- * 钉钉渠道配置 Schema
+ * 钉钉渠道配置 Schema（单账户）
  */
 export const DingTalkConfigSchema = z.object({
   /** 是否启用钉钉渠道 */
   enabled: z.boolean().optional(),
-  /** 默认账户名称 */
+  /** 账户名称 */
   name: z.string().optional(),
   /** 钉钉应用 AppKey */
   clientId: z.string().optional(),
   /** 钉钉应用 AppSecret */
   clientSecret: z.string().optional(),
-  /** 群组配置 */
-  groups: z.record(z.string(), z.object({
-    requireMention: z.boolean().optional(),
-  })).optional(),
-  /** 多账户配置 */
-  accounts: z.record(z.string(), DingTalkAccountConfigSchema).optional(),
 });
 
-export type DingTalkAccountConfig = z.infer<typeof DingTalkAccountConfigSchema>;
 export type DingTalkConfig = z.infer<typeof DingTalkConfigSchema>;
 
 // ======================= Resolved Account Type =======================
@@ -49,7 +24,7 @@ export type DingTalkConfig = z.infer<typeof DingTalkConfigSchema>;
  * 解析后的钉钉账户配置
  */
 export interface ResolvedDingTalkAccount {
-  /** 账户 ID */
+  /** 账户 ID（固定为 default） */
   accountId: string;
   /** 账户名称 */
   name?: string;
@@ -61,10 +36,6 @@ export interface ResolvedDingTalkAccount {
   clientSecret: string;
   /** Token 来源 */
   tokenSource: "config" | "none";
-  /** 账户配置详情 */
-  config: {
-    groups?: Record<string, { requireMention?: boolean }>;
-  };
 }
 
 // ======================= Message Types =======================

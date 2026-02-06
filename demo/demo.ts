@@ -22,6 +22,12 @@ import type {
   UploadMediaResult,
   MediaUploadResponse,
   WebhookResponse,
+  RichTextContent,
+  RichTextElement,
+  AudioContent,
+  VideoContent,
+  FileContent,
+  PictureContent,
 } from './types/index.js';
 
 // 加载环境变量
@@ -667,6 +673,306 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
         }
       } else {
         console.log('⚠️  图片消息缺少 downloadCode 或 robotCode');
+      }
+    }
+
+    // 处理富文本消息（文字+图片混合）
+    if (data.msgtype === 'richText') {
+      console.log('\n📝🖼️ 富文本消息详情:');
+      const richTextContent = data.content as RichTextContent;
+      console.log('   内容:', JSON.stringify(richTextContent, null, 2));
+
+      const { robotCode, senderStaffId, conversationType, conversationId } = data;
+
+      if (richTextContent?.richText && robotCode) {
+        try {
+          console.log('\n🔄 开始处理富文本消息...');
+
+          // 解析富文本内容
+          const elements = richTextContent.richText;
+          const textParts: string[] = [];
+          const imageInfos: { downloadCode: string; width?: number; height?: number; extension?: string }[] = [];
+
+          for (const element of elements) {
+            // 文本元素：有 text 字段且没有 type 或 type 为 text
+            if (element.text !== undefined && element.type !== 'picture') {
+              textParts.push(element.text);
+            }
+            // 图片元素：type 为 picture
+            else if (element.type === 'picture') {
+              const downloadCode = element.downloadCode || element.pictureDownloadCode;
+              if (downloadCode) {
+                imageInfos.push({
+                  downloadCode,
+                  width: element.width,
+                  height: element.height,
+                  extension: element.extension
+                });
+              }
+            }
+          }
+
+          console.log('   解析结果:');
+          console.log('   - 文本部分:', textParts.join(' | ').replace(/\n/g, '\\n'));
+          console.log('   - 图片数量:', imageInfos.length);
+
+          // 处理每张图片
+          const savedImages: string[] = [];
+          for (let i = 0; i < imageInfos.length; i++) {
+            const imgInfo = imageInfos[i];
+            console.log(`\n🔄 处理第 ${i + 1}/${imageInfos.length} 张图片...`);
+            console.log(`   尺寸: ${imgInfo.width ?? '?'}x${imgInfo.height ?? '?'}, 格式: ${imgInfo.extension ?? '未知'}`);
+
+            const downloadUrl = await getFileDownloadUrl(imgInfo.downloadCode, robotCode);
+            const imageBuffer = await downloadFromUrl(downloadUrl);
+            const timestamp = Date.now();
+            const ext = imgInfo.extension ?? 'png';
+            const filename = `richtext_image_${timestamp}_${i + 1}.${ext}`;
+            const savedPath = saveImageToTmp(imageBuffer, filename);
+            savedImages.push(filename);
+            console.log(`💾 图片 ${i + 1} 已保存: ${savedPath}`);
+          }
+
+          // 回复用户
+          const replyText = [
+            '✅ 收到富文本消息！',
+            '',
+            '📝 文本内容:',
+            textParts.length > 0 ? textParts.join('\n') : '（无文本）',
+            '',
+            `🖼️ 包含 ${imageInfos.length} 张图片:`,
+            ...savedImages.map((name, i) => `   ${i + 1}. ${name}`)
+          ].join('\n');
+
+          if (data.sessionWebhook) {
+            const replyBody: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: replyText },
+              at: { atUserIds: [senderStaffId], isAtAll: false }
+            };
+            await replyMessage(data.sessionWebhook, replyBody);
+          }
+
+        } catch (error) {
+          const err = error as Error;
+          console.error('\n❌ 处理富文本消息失败:', err.message);
+          if (data.sessionWebhook) {
+            const errorReply: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: `❌ 富文本消息处理失败: ${err.message}` }
+            };
+            await replyMessage(data.sessionWebhook, errorReply);
+          }
+        }
+      }
+    }
+
+    // 处理音频消息
+    if (data.msgtype === 'audio') {
+      console.log('\n🎵 音频消息详情:');
+      const audioContent = data.content as AudioContent;
+      console.log('   内容:', JSON.stringify(audioContent, null, 2));
+
+      const { robotCode, senderStaffId } = data;
+      const downloadCode = audioContent?.downloadCode;
+      const duration = audioContent?.duration;
+      const extension = audioContent?.extension ?? 'amr';
+      const recognition = audioContent?.recognition;
+
+      console.log('   下载码:', downloadCode ?? '无');
+      console.log('   时长:', duration ? `${(duration / 1000).toFixed(1)}秒` : '未知');
+      console.log('   格式:', extension);
+      console.log('   语音转文字:', recognition ?? '（无）');
+
+      if (downloadCode && robotCode) {
+        try {
+          console.log('\n🔄 开始下载音频...');
+
+          // 获取下载链接并下载
+          const downloadUrl = await getFileDownloadUrl(downloadCode, robotCode);
+          const audioBuffer = await downloadFromUrl(downloadUrl);
+
+          // 保存到本地
+          const timestamp = Date.now();
+          const filename = `audio_${timestamp}.${extension}`;
+          const savedPath = saveImageToTmp(audioBuffer, filename);
+          console.log('💾 音频已保存到本地:', savedPath);
+          console.log('   文件大小:', (audioBuffer.length / 1024).toFixed(2), 'KB');
+
+          // 回复用户
+          const replyLines = [
+            '✅ 收到语音消息！',
+            '',
+            `📁 文件名: ${filename}`,
+            `⏱️ 时长: ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'}`,
+            `📊 大小: ${(audioBuffer.length / 1024).toFixed(2)} KB`,
+            `🎵 格式: ${extension.toUpperCase()}`
+          ];
+
+          if (recognition) {
+            replyLines.push('', '🗣️ 语音识别结果:', recognition);
+          }
+
+          if (data.sessionWebhook) {
+            const replyBody: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: replyLines.join('\n') },
+              at: { atUserIds: [senderStaffId], isAtAll: false }
+            };
+            await replyMessage(data.sessionWebhook, replyBody);
+          }
+
+        } catch (error) {
+          const err = error as Error;
+          console.error('\n❌ 处理音频消息失败:', err.message);
+          if (data.sessionWebhook) {
+            const errorReply: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: `❌ 音频处理失败: ${err.message}` }
+            };
+            await replyMessage(data.sessionWebhook, errorReply);
+          }
+        }
+      } else {
+        console.log('⚠️  音频消息缺少 downloadCode 或 robotCode');
+      }
+    }
+
+    // 处理视频消息
+    if (data.msgtype === 'video') {
+      console.log('\n🎬 视频消息详情:');
+      const videoContent = data.content as VideoContent;
+      console.log('   内容:', JSON.stringify(videoContent, null, 2));
+
+      const { robotCode, senderStaffId } = data;
+      const downloadCode = videoContent?.downloadCode;
+      const duration = videoContent?.duration;
+      const extension = videoContent?.extension ?? 'mp4';
+      const width = videoContent?.width;
+      const height = videoContent?.height;
+      const videoType = videoContent?.videoType;
+
+      console.log('   下载码:', downloadCode ?? '无');
+      console.log('   时长:', duration ? `${(duration / 1000).toFixed(1)}秒` : '未知');
+      console.log('   分辨率:', width && height ? `${width}x${height}` : '未知');
+      console.log('   格式:', extension);
+      console.log('   视频类型:', videoType ?? '未知');
+
+      if (downloadCode && robotCode) {
+        try {
+          console.log('\n🔄 开始下载视频...');
+
+          // 获取下载链接并下载
+          const downloadUrl = await getFileDownloadUrl(downloadCode, robotCode);
+          const videoBuffer = await downloadFromUrl(downloadUrl);
+
+          // 保存到本地
+          const timestamp = Date.now();
+          const filename = `video_${timestamp}.${extension}`;
+          const savedPath = saveImageToTmp(videoBuffer, filename);
+          console.log('💾 视频已保存到本地:', savedPath);
+          console.log('   文件大小:', (videoBuffer.length / 1024 / 1024).toFixed(2), 'MB');
+
+          // 回复用户
+          const replyLines = [
+            '✅ 收到视频消息！',
+            '',
+            `📁 文件名: ${filename}`,
+            `⏱️ 时长: ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'}`,
+            `📐 分辨率: ${width && height ? `${width}x${height}` : '未知'}`,
+            `📊 大小: ${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB`,
+            `🎬 格式: ${extension.toUpperCase()}`
+          ];
+
+          if (data.sessionWebhook) {
+            const replyBody: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: replyLines.join('\n') },
+              at: { atUserIds: [senderStaffId], isAtAll: false }
+            };
+            await replyMessage(data.sessionWebhook, replyBody);
+          }
+
+        } catch (error) {
+          const err = error as Error;
+          console.error('\n❌ 处理视频消息失败:', err.message);
+          if (data.sessionWebhook) {
+            const errorReply: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: `❌ 视频处理失败: ${err.message}` }
+            };
+            await replyMessage(data.sessionWebhook, errorReply);
+          }
+        }
+      } else {
+        console.log('⚠️  视频消息缺少 downloadCode 或 robotCode');
+      }
+    }
+
+    // 处理文件消息
+    if (data.msgtype === 'file') {
+      console.log('\n📄 文件消息详情:');
+      const fileContent = data.content as FileContent;
+      console.log('   内容:', JSON.stringify(fileContent, null, 2));
+
+      const { robotCode, senderStaffId } = data;
+      const downloadCode = fileContent?.downloadCode;
+      const fileName = fileContent?.fileName ?? 'unknown_file';
+      const fileSize = fileContent?.fileSize;
+      const extension = fileContent?.extension ?? '';
+
+      console.log('   下载码:', downloadCode ?? '无');
+      console.log('   文件名:', fileName);
+      console.log('   大小:', fileSize ? `${(fileSize / 1024).toFixed(2)} KB` : '未知');
+      console.log('   扩展名:', extension || '无');
+
+      if (downloadCode && robotCode) {
+        try {
+          console.log('\n🔄 开始下载文件...');
+
+          // 获取下载链接并下载
+          const downloadUrl = await getFileDownloadUrl(downloadCode, robotCode);
+          const fileBuffer = await downloadFromUrl(downloadUrl);
+
+          // 保存到本地（使用原始文件名，加时间戳避免冲突）
+          const timestamp = Date.now();
+          const savedFileName = `${timestamp}_${fileName}`;
+          const savedPath = saveImageToTmp(fileBuffer, savedFileName);
+          console.log('💾 文件已保存到本地:', savedPath);
+          console.log('   实际大小:', (fileBuffer.length / 1024).toFixed(2), 'KB');
+
+          // 回复用户
+          const replyLines = [
+            '✅ 收到文件！',
+            '',
+            `📁 原始文件名: ${fileName}`,
+            `💾 保存为: ${savedFileName}`,
+            `📊 大小: ${(fileBuffer.length / 1024).toFixed(2)} KB`,
+            `📝 类型: ${extension.toUpperCase() || '未知'}`
+          ];
+
+          if (data.sessionWebhook) {
+            const replyBody: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: replyLines.join('\n') },
+              at: { atUserIds: [senderStaffId], isAtAll: false }
+            };
+            await replyMessage(data.sessionWebhook, replyBody);
+          }
+
+        } catch (error) {
+          const err = error as Error;
+          console.error('\n❌ 处理文件消息失败:', err.message);
+          if (data.sessionWebhook) {
+            const errorReply: TextReplyBody = {
+              msgtype: 'text',
+              text: { content: `❌ 文件处理失败: ${err.message}` }
+            };
+            await replyMessage(data.sessionWebhook, errorReply);
+          }
+        }
+      } else {
+        console.log('⚠️  文件消息缺少 downloadCode 或 robotCode');
       }
     }
 

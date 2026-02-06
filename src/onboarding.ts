@@ -4,8 +4,6 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
 import type { DingTalkConfig } from "./types.js";
 import {
   listDingTalkAccountIds,
-  normalizeAccountId,
-  resolveDefaultDingTalkAccountId,
   resolveDingTalkAccount,
 } from "./accounts.js";
 import { PLUGIN_ID } from "./constants.js";
@@ -31,7 +29,7 @@ async function noteDingTalkCredentialsHelp(prompter: {
 }
 
 /**
- * DingTalk Onboarding Adapter
+ * DingTalk Onboarding Adapter（单账户模式）
  */
 export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
@@ -51,20 +49,9 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
   configure: async ({
     cfg,
     prompter,
-    accountOverrides,
   }) => {
-    const dingtalkOverride = (accountOverrides as Record<string, string | undefined>)[PLUGIN_ID]?.trim();
-    const defaultDingTalkAccountId = resolveDefaultDingTalkAccountId(cfg);
-    // 直接使用 override 或默认账户 ID，不再提示用户输入
-    const dingtalkAccountId = dingtalkOverride
-      ? normalizeAccountId(dingtalkOverride)
-      : defaultDingTalkAccountId;
-
     let next = cfg;
-    const resolvedAccount = resolveDingTalkAccount({
-      cfg: next,
-      accountId: dingtalkAccountId,
-    });
+    const resolvedAccount = resolveDingTalkAccount({ cfg: next });
     const accountConfigured = Boolean(
       resolvedAccount.clientId?.trim() && resolvedAccount.clientSecret?.trim()
     );
@@ -114,44 +101,21 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
 
     if (clientId && clientSecret) {
       const updatedDingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-      if (dingtalkAccountId === DEFAULT_ACCOUNT_ID) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            [PLUGIN_ID]: {
-              ...updatedDingtalkConfig,
-              enabled: true,
-              clientId,
-              clientSecret,
-            },
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          [PLUGIN_ID]: {
+            ...updatedDingtalkConfig,
+            enabled: true,
+            clientId,
+            clientSecret,
           },
-        };
-      } else {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            [PLUGIN_ID]: {
-              ...updatedDingtalkConfig,
-              enabled: true,
-              accounts: {
-                ...updatedDingtalkConfig.accounts,
-                [dingtalkAccountId]: {
-                  ...updatedDingtalkConfig.accounts?.[dingtalkAccountId],
-                  enabled:
-                    updatedDingtalkConfig.accounts?.[dingtalkAccountId]?.enabled ?? true,
-                  clientId,
-                  clientSecret,
-                },
-              },
-            },
-          },
-        };
-      }
+        },
+      };
     }
 
-    return { cfg: next, accountId: dingtalkAccountId };
+    return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
   },
   disable: (cfg) => {
     const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;

@@ -116,7 +116,7 @@ export async function replyViaWebhook(
 /**
  * 主动发送单聊文本消息给指定用户
  */
-export async function sendTextToUser(
+export async function sendTextMessage(
   userId: string,
   content: string,
   options: SendMessageOptions
@@ -150,63 +150,6 @@ export async function sendTextToUser(
     messageId: processQueryKey,
     chatId: userId,
   };
-}
-
-/**
- * 主动发送群聊文本消息
- */
-export async function sendTextToGroup(
-  openConversationId: string,
-  content: string,
-  options: SendMessageOptions
-): Promise<SendMessageResult> {
-  const accessToken = await getAccessToken(options.account);
-  const robotClient = createRobotClient();
-
-  const headers = new robot_1_0.OrgGroupSendHeaders({
-    xAcsDingtalkAccessToken: accessToken,
-  });
-
-  const msgParam = JSON.stringify({ content });
-
-  const request = new robot_1_0.OrgGroupSendRequest({
-    robotCode: options.account.clientId,
-    openConversationId,
-    msgKey: "sampleText",
-    msgParam,
-  });
-
-  const response = await robotClient.orgGroupSendWithOptions(
-    request,
-    headers,
-    new $Util.RuntimeOptions({})
-  );
-
-  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-${Date.now()}`;
-
-  return {
-    messageId: processQueryKey,
-    chatId: openConversationId,
-  };
-}
-
-/**
- * 发送文本消息（自动判断单聊/群聊）
- */
-export async function sendTextMessage(
-  to: string,
-  content: string,
-  options: SendMessageOptions & {
-    conversationType?: "1" | "2";
-  }
-): Promise<SendMessageResult> {
-  // 根据目标格式判断：群聊 ID 通常是 cid 开头
-  const isGroup = options.conversationType === "2" || to.startsWith("cid");
-
-  if (isGroup) {
-    return sendTextToGroup(to, content, options);
-  }
-  return sendTextToUser(to, content, options);
 }
 
 // ======================= 探测 Bot =======================
@@ -361,7 +304,7 @@ export async function uploadMedia(
  * @param photoURL - 图片的公网可访问 URL
  * @param options - 发送选项
  */
-export async function sendImageToUser(
+export async function sendImageMessage(
   userId: string,
   photoURL: string,
   options: SendMessageOptions
@@ -394,67 +337,4 @@ export async function sendImageToUser(
     messageId: processQueryKey,
     chatId: userId,
   };
-}
-
-/**
- * 发送群聊图片消息
- * @param openConversationId - 群会话 ID
- * @param photoURL - 图片的公网可访问 URL
- * @param options - 发送选项
- */
-export async function sendImageToGroup(
-  openConversationId: string,
-  photoURL: string,
-  options: SendMessageOptions
-): Promise<SendMessageResult> {
-  const accessToken = await getAccessToken(options.account);
-  const robotClient = createRobotClient();
-
-  const headers = new robot_1_0.OrgGroupSendHeaders({
-    xAcsDingtalkAccessToken: accessToken,
-  });
-
-  const msgParam = JSON.stringify({ photoURL });
-
-  const request = new robot_1_0.OrgGroupSendRequest({
-    robotCode: options.account.clientId,
-    openConversationId,
-    msgKey: "sampleImageMsg",
-    msgParam,
-  });
-
-  const response = await robotClient.orgGroupSendWithOptions(
-    request,
-    headers,
-    new $Util.RuntimeOptions({})
-  );
-
-  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-img-${Date.now()}`;
-
-  return {
-    messageId: processQueryKey,
-    chatId: openConversationId,
-  };
-}
-
-/**
- * 发送图片消息（自动判断单聊/群聊）
- * @param to - 目标 ID（用户 ID 或群会话 ID）
- * @param photoURL - 图片的公网可访问 URL
- * @param options - 发送选项
- */
-export async function sendImageMessage(
-  to: string,
-  photoURL: string,
-  options: SendMessageOptions & {
-    conversationType?: "1" | "2";
-  }
-): Promise<SendMessageResult> {
-  // 根据目标格式判断：群聊 ID 通常是 cid 开头
-  const isGroup = options.conversationType === "2" || to.startsWith("cid");
-
-  if (isGroup) {
-    return sendImageToGroup(to, photoURL, options);
-  }
-  return sendImageToUser(to, photoURL, options);
 }

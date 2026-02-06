@@ -132,22 +132,19 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     mediaInfo?: { path: string; contentType: string }
   ) => {
     try {
-      // 构建消息上下文
-      const isGroup = data.conversationType === "2";
+      // 构建消息上下文（仅支持单聊）
       const senderId = data.senderStaffId;
       const senderName = data.senderNick;
 
-      // 确定 chatId（群聊用 conversationId，单聊用 senderId）
-      const chatId = isGroup ? data.conversationId : senderId;
+      // 单聊用 senderId 作为 chatId
+      const chatId = senderId;
 
       // 文本内容：如果是图片消息，使用占位符
       const textContent = data.text?.content?.trim() ?? "";
       const rawBody = textContent || (mediaInfo ? "<media:image>" : "");
 
       // 构建 From/To 地址
-      const fromAddress = isGroup
-        ? `${PLUGIN_ID}:group:${data.conversationId}`
-        : `${PLUGIN_ID}:${senderId}`;
+      const fromAddress = `${PLUGIN_ID}:${senderId}`;
       const toAddress = fromAddress;
 
       // 解析路由（需要先解析路由才能获取 sessionKey）
@@ -156,7 +153,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         channel: PLUGIN_ID,
         accountId,
         peer: {
-          kind: isGroup ? "group" : "dm",
+          kind: "dm",
           id: chatId,
         },
       });
@@ -168,7 +165,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         from: senderName || senderId,
         timestamp: parseInt(data.createAt),
         body: rawBody,
-        chatType: isGroup ? "group" : "direct",
+        chatType: "direct",
         sender: {
           id: senderId,
           name: senderName,
@@ -185,9 +182,8 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         To: toAddress,
         SessionKey: route.sessionKey,
         AccountId: accountId,
-        ChatType: isGroup ? "group" : "direct",
-        ConversationLabel: isGroup ? `group:${data.conversationId}` : senderName || senderId,
-        GroupSubject: isGroup ? data.conversationId : undefined,
+        ChatType: "direct",
+        ConversationLabel: senderName || senderId,
         SenderId: senderId,
         SenderName: senderName,
         Provider: PLUGIN_ID,
@@ -216,9 +212,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
 
             // 使用 sessionWebhook 回复消息
             if (data.sessionWebhook) {
-              const result = await replyViaWebhook(data.sessionWebhook, replyText, {
-                atUserIds: isGroup ? [senderId] : undefined,
-              });
+              const result = await replyViaWebhook(data.sessionWebhook, replyText);
               if (result.errcode !== 0) {
                 throw new Error(`回复失败: ${result.errmsg}`);
               }
@@ -262,17 +256,21 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     try {
       const data = JSON.parse(message.data) as DingTalkMessageData;
 
+      // 只处理单聊消息
+      if (data.conversationType === "2") {
+        logger.log(`收到群聊消息，暂不支持群聊，忽略`);
+        client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
+        return;
+      }
+
       // 打印收到的消息信息（单行格式）
-      const isGroup = data.conversationType === "2";
-      const chatType = isGroup ? "群聊" : "单聊";
       const textContent = data.text?.content?.trim() ?? "";
       const contentPreview = data.msgtype === "text"
         ? (textContent.slice(0, 50) || "") + (textContent.length > 50 ? "..." : "")
         : data.msgtype === "picture"
           ? `[图片]`
           : `[${data.msgtype}]`;
-      const groupInfo = isGroup ? ` 群:${data.conversationId?.slice(-8)}` : "";
-      logger.log(`收到消息 | ${chatType}${groupInfo} | ${data.senderNick}(${data.senderStaffId}) | ${contentPreview}`);
+      logger.log(`收到消息 | 单聊 | ${data.senderNick}(${data.senderStaffId}) | ${contentPreview}`);
 
       // Record inbound activity
       recordChannelRuntimeState({
@@ -282,8 +280,6 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
           lastInboundAt: Date.now(),
         },
       });
-
-      const senderId = data.senderStaffId;
 
       // 立即返回成功响应给钉钉服务器，避免超时
       client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
@@ -296,9 +292,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         if (!downloadCode) {
           logger.log("图片消息缺少 downloadCode");
           if (data.sessionWebhook) {
-            replyViaWebhook(data.sessionWebhook, "图片处理失败：缺少下载码", {
-              atUserIds: [senderId],
-            }).catch((err) => {
+            replyViaWebhook(data.sessionWebhook, "图片处理失败：缺少下载码").catch((err) => {
               logger.error("回复图片错误提示失败:", err);
             });
           }
@@ -316,9 +310,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
             } else {
               // 图片下载/保存失败
               if (data.sessionWebhook) {
-                replyViaWebhook(data.sessionWebhook, "图片处理失败，请稍后重试", {
-                  atUserIds: [senderId],
-                }).catch((err) => {
+                replyViaWebhook(data.sessionWebhook, "图片处理失败，请稍后重试").catch((err) => {
                   logger.error("回复图片错误提示失败:", err);
                 });
               }
@@ -347,9 +339,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
 
       // 不支持的消息类型
       if (data.sessionWebhook) {
-        replyViaWebhook(data.sessionWebhook, "暂不支持该类型消息，请发送文本或图片消息。", {
-          atUserIds: [senderId],
-        }).catch((err) => {
+        replyViaWebhook(data.sessionWebhook, "暂不支持该类型消息，请发送文本或图片消息。").catch((err) => {
           logger.error("回复非支持消息提示失败:", err);
         });
       }
