@@ -99,8 +99,44 @@ export interface FileContent {
   mediaId?: string;
 }
 
+// ======================= 富文本消息类型 =======================
+
+/** 富文本元素类型 */
+export type RichTextElementType = "text" | "picture";
+
+/** 富文本元素 - 文本 */
+export interface RichTextTextElement {
+  /** 文本元素可能没有 type 字段，或 type 为 "text" */
+  type?: "text";
+  /** 文本内容 */
+  text: string;
+}
+
+/** 富文本元素 - 图片 */
+export interface RichTextPictureElement {
+  type: "picture";
+  /** 下载码 */
+  downloadCode?: string;
+  /** 备选下载码字段 */
+  pictureDownloadCode?: string;
+  /** 图片宽度 */
+  width?: number;
+  /** 图片高度 */
+  height?: number;
+  /** 文件扩展名 */
+  extension?: string;
+}
+
+/** 富文本元素联合类型 */
+export type RichTextElement = RichTextTextElement | RichTextPictureElement;
+
+/** 富文本消息内容 */
+export interface RichTextContent {
+  richText: RichTextElement[];
+}
+
 /** 消息内容联合类型 */
-export type MessageContent = PictureContent | AudioContent | VideoContent | FileContent;
+export type MessageContent = PictureContent | AudioContent | VideoContent | FileContent | RichTextContent;
 
 /**
  * 钉钉机器人消息数据（来自 Stream 回调）

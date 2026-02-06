@@ -1,6 +1,6 @@
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
-import type { DingTalkMessageData, ResolvedDingTalkAccount, AudioContent, VideoContent, FileContent, PictureContent } from "./types.js";
+import type { DingTalkMessageData, ResolvedDingTalkAccount, AudioContent, VideoContent, FileContent, PictureContent, RichTextContent, RichTextElement, RichTextPictureElement } from "./types.js";
 import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl } from "./client.js";
 import { resolveDingTalkAccount } from "./accounts.js";
 import { getDingTalkRuntime } from "./runtime.js";
@@ -75,9 +75,12 @@ function buildMediaContextFields(media?: InboundMediaContext): Record<string, un
     MediaUrl: primary.path,
   };
 
-  // 如果有多个媒体项，添加扩展字段
-  if (media.items.length > 1) {
-    baseFields.MediaItems = media.items;
+  // 多媒体字段（与 Telegram 保持一致的命名）
+  // 即使只有一个媒体也添加这些字段，保持一致性
+  if (media.items.length > 0) {
+    baseFields.MediaPaths = media.items.map((m) => m.path);
+    baseFields.MediaUrls = media.items.map((m) => m.path);
+    baseFields.MediaTypes = media.items.map((m) => m.contentType).filter(Boolean);
   }
 
   // 根据主媒体类型添加特定字段
@@ -347,6 +350,147 @@ const fileMessageHandler: MessageHandler = {
   },
 };
 
+// ============================================================================
+// 富文本消息处理辅助函数
+// ============================================================================
+
+/** 判断富文本元素是否为图片 */
+function isRichTextPicture(element: RichTextElement): element is RichTextPictureElement {
+  return element.type === "picture";
+}
+
+/** 从富文本元素中提取下载码 */
+function getRichTextPictureDownloadCode(element: RichTextPictureElement): string | undefined {
+  return element.downloadCode ?? element.pictureDownloadCode;
+}
+
+/** 解析富文本内容，提取文本和图片信息 */
+function parseRichTextContent(content: RichTextContent): {
+  textParts: string[];
+  imageInfos: Array<{
+    downloadCode: string;
+    width?: number;
+    height?: number;
+    extension?: string;
+  }>;
+} {
+  const textParts: string[] = [];
+  const imageInfos: Array<{
+    downloadCode: string;
+    width?: number;
+    height?: number;
+    extension?: string;
+  }> = [];
+
+  for (const element of content.richText) {
+    if (isRichTextPicture(element)) {
+      // 图片元素
+      const downloadCode = getRichTextPictureDownloadCode(element);
+      if (downloadCode) {
+        imageInfos.push({
+          downloadCode,
+          width: element.width,
+          height: element.height,
+          extension: element.extension,
+        });
+      }
+    } else {
+      // 文本元素（type 为 undefined 或 "text"）
+      if (element.text) {
+        textParts.push(element.text);
+      }
+    }
+  }
+
+  return { textParts, imageInfos };
+}
+
+/** 富文本消息处理器 */
+const richTextMessageHandler: MessageHandler = {
+  canHandle: (data) => data.msgtype === "richText",
+
+  getPreview: (data) => {
+    const content = data.content as RichTextContent | undefined;
+    if (!content?.richText) return "[富文本]";
+
+    const { textParts, imageInfos } = parseRichTextContent(content);
+    const textPreview = textParts.join(" ").slice(0, 30);
+    const imageCount = imageInfos.length;
+
+    if (textPreview && imageCount > 0) {
+      return `[图文] ${textPreview}${textParts.join(" ").length > 30 ? "..." : ""} +${imageCount}图`;
+    } else if (textPreview) {
+      return `[富文本] ${textPreview}${textParts.join(" ").length > 30 ? "..." : ""}`;
+    } else if (imageCount > 0) {
+      return `[图文] ${imageCount}张图片`;
+    }
+    return "[富文本]";
+  },
+
+  validate: (data) => {
+    const content = data.content as RichTextContent | undefined;
+    if (!content?.richText || !Array.isArray(content.richText)) {
+      return { valid: false, errorMessage: "富文本消息格式错误" };
+    }
+    // 至少要有文本或图片
+    const { textParts, imageInfos } = parseRichTextContent(content);
+    if (textParts.length === 0 && imageInfos.length === 0) {
+      return { valid: false, errorMessage: undefined }; // 空消息静默忽略
+    }
+    return { valid: true };
+  },
+
+  handle: async (data, account) => {
+    const content = data.content as RichTextContent;
+    const { textParts, imageInfos } = parseRichTextContent(content);
+
+    try {
+      const mediaItems: MediaItem[] = [];
+
+      // 下载并保存所有图片
+      for (let i = 0; i < imageInfos.length; i++) {
+        const imgInfo = imageInfos[i];
+        logger.log(`处理富文本图片 ${i + 1}/${imageInfos.length}...`);
+
+        const saved = await downloadAndSaveMedia({
+          downloadCode: imgInfo.downloadCode,
+          account,
+          mediaKind: "picture",
+          extension: imgInfo.extension,
+        });
+
+        mediaItems.push({
+          kind: "picture",
+          path: saved.path,
+          contentType: saved.contentType,
+          fileSize: saved.fileSize,
+        });
+      }
+
+      // 构建媒体上下文
+      // 对于图文混排，将文本内容存入 data.text 以便后续处理
+      // 这里通过修改 data 对象来传递文本内容
+      const combinedText = textParts.join("\n").trim();
+      if (combinedText) {
+        // 将富文本中的文本内容写入 text 字段，以便后续流程使用
+        data.text = { content: combinedText };
+      }
+
+      const media: InboundMediaContext | undefined = mediaItems.length > 0
+        ? { items: mediaItems, primary: mediaItems[0] }
+        : undefined;
+
+      return {
+        success: true,
+        media,
+      };
+    } catch (err) {
+      logger.error("富文本消息处理失败：", err);
+      return { success: false, errorMessage: `富文本消息处理失败：${getErrorMessage(err)}` };
+    }
+  },
+};
+
 /** 不支持的消息类型处理器 */
 const unsupportedMessageHandler: MessageHandler = {
   canHandle: () => true, // 作为兜底处理器
@@ -355,7 +499,7 @@ const unsupportedMessageHandler: MessageHandler = {
 
   validate: () => ({
     valid: false,
-    errorMessage: "暂不支持该类型消息，请发送文本、图片、语音、视频或文件。",
+    errorMessage: "暂不支持该类型消息，请发送文本、图片、语音、视频、文件或图文混排消息。",
   }),
 
   handle: async () => {
@@ -370,6 +514,7 @@ const messageHandlers: MessageHandler[] = [
   audioMessageHandler,
   videoMessageHandler,
   fileMessageHandler,
+  richTextMessageHandler,
   unsupportedMessageHandler, // 兜底处理器必须放在最后
 ];
 
