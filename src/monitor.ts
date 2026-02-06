@@ -1,6 +1,6 @@
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
-import type { DingTalkMessageData, ResolvedDingTalkAccount } from "./types.js";
+import type { DingTalkMessageData, ResolvedDingTalkAccount, AudioContent, VideoContent, FileContent, PictureContent } from "./types.js";
 import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl } from "./client.js";
 import { resolveDingTalkAccount } from "./accounts.js";
 import { getDingTalkRuntime } from "./runtime.js";
@@ -161,7 +161,8 @@ const pictureMessageHandler: MessageHandler = {
   getPreview: () => "[图片]",
 
   validate: (data) => {
-    const downloadCode = data.content?.downloadCode;
+    const content = data.content as PictureContent | undefined;
+    const downloadCode = content?.downloadCode ?? content?.pictureDownloadCode;
     if (!downloadCode) {
       return { valid: false, errorMessage: "图片处理失败：缺少下载码" };
     }
@@ -169,27 +170,180 @@ const pictureMessageHandler: MessageHandler = {
   },
 
   handle: async (data, account) => {
-    const downloadCode = data.content?.downloadCode!;
-    const saved = await downloadAndSaveImage(downloadCode, account);
+    const content = data.content as PictureContent;
+    const downloadCode = (content?.downloadCode ?? content?.pictureDownloadCode)!;
 
-    if (!saved) {
-      return { success: false, errorMessage: "图片处理失败，请稍后重试" };
+    try {
+      const saved = await downloadAndSaveMedia({
+        downloadCode,
+        account,
+        mediaKind: "picture",
+        extension: content?.extension,
+      });
+
+      const mediaItem: MediaItem = {
+        kind: "picture",
+        path: saved.path,
+        contentType: saved.contentType,
+        fileSize: saved.fileSize,
+      };
+
+      return {
+        success: true,
+        media: { items: [mediaItem], primary: mediaItem },
+      };
+    } catch (err) {
+      logger.error("图片处理失败：", err);
+      return { success: false, errorMessage: `图片处理失败：${getErrorMessage(err)}` };
     }
+  },
+};
 
-    // 构建媒体上下文
-    const mediaItem: MediaItem = {
-      kind: "picture",
-      path: saved.path,
-      contentType: saved.contentType,
-    };
+/** 语音消息处理器 */
+const audioMessageHandler: MessageHandler = {
+  canHandle: (data) => data.msgtype === "audio",
 
-    return {
-      success: true,
-      media: {
-        items: [mediaItem],
-        primary: mediaItem,
-      },
-    };
+  getPreview: (data) => {
+    const content = data.content as AudioContent | undefined;
+    const duration = content?.duration;
+    return duration ? `[语音 ${(duration / 1000).toFixed(1)}s]` : "[语音]";
+  },
+
+  validate: (data) => {
+    const content = data.content as AudioContent | undefined;
+    if (!content?.downloadCode) {
+      return { valid: false, errorMessage: "语音处理失败：缺少下载码" };
+    }
+    return { valid: true };
+  },
+
+  handle: async (data, account) => {
+    const content = data.content as AudioContent;
+    const downloadCode = content.downloadCode!;
+
+    try {
+      const saved = await downloadAndSaveMedia({
+        downloadCode,
+        account,
+        mediaKind: "audio",
+        extension: content.extension ?? "amr",
+      });
+
+      const mediaItem: MediaItem = {
+        kind: "audio",
+        path: saved.path,
+        contentType: saved.contentType,
+        fileSize: saved.fileSize,
+        duration: content.duration ? content.duration / 1000 : undefined,
+      };
+
+      return {
+        success: true,
+        media: { items: [mediaItem], primary: mediaItem },
+      };
+    } catch (err) {
+      logger.error("语音处理失败：", err);
+      return { success: false, errorMessage: `语音处理失败：${getErrorMessage(err)}` };
+    }
+  },
+};
+
+/** 视频消息处理器 */
+const videoMessageHandler: MessageHandler = {
+  canHandle: (data) => data.msgtype === "video",
+
+  getPreview: (data) => {
+    const content = data.content as VideoContent | undefined;
+    const duration = content?.duration;
+    return duration ? `[视频 ${(duration / 1000).toFixed(1)}s]` : "[视频]";
+  },
+
+  validate: (data) => {
+    const content = data.content as VideoContent | undefined;
+    if (!content?.downloadCode) {
+      return { valid: false, errorMessage: "视频处理失败：缺少下载码" };
+    }
+    return { valid: true };
+  },
+
+  handle: async (data, account) => {
+    const content = data.content as VideoContent;
+    const downloadCode = content.downloadCode!;
+
+    try {
+      const saved = await downloadAndSaveMedia({
+        downloadCode,
+        account,
+        mediaKind: "video",
+        extension: content.extension ?? "mp4",
+      });
+
+      const mediaItem: MediaItem = {
+        kind: "video",
+        path: saved.path,
+        contentType: saved.contentType,
+        fileSize: saved.fileSize,
+        duration: content.duration ? content.duration / 1000 : undefined,
+      };
+
+      return {
+        success: true,
+        media: { items: [mediaItem], primary: mediaItem },
+      };
+    } catch (err) {
+      logger.error("视频处理失败：", err);
+      return { success: false, errorMessage: `视频处理失败：${getErrorMessage(err)}` };
+    }
+  },
+};
+
+/** 文件消息处理器 */
+const fileMessageHandler: MessageHandler = {
+  canHandle: (data) => data.msgtype === "file",
+
+  getPreview: (data) => {
+    const content = data.content as FileContent | undefined;
+    const fileName = content?.fileName;
+    return fileName ? `[文件] ${fileName}` : "[文件]";
+  },
+
+  validate: (data) => {
+    const content = data.content as FileContent | undefined;
+    if (!content?.downloadCode) {
+      return { valid: false, errorMessage: "文件处理失败：缺少下载码" };
+    }
+    return { valid: true };
+  },
+
+  handle: async (data, account) => {
+    const content = data.content as FileContent;
+    const downloadCode = content.downloadCode!;
+
+    try {
+      const saved = await downloadAndSaveMedia({
+        downloadCode,
+        account,
+        mediaKind: "file",
+        extension: content.extension,
+        fileName: content.fileName,
+      });
+
+      const mediaItem: MediaItem = {
+        kind: "file",
+        path: saved.path,
+        contentType: saved.contentType,
+        fileSize: saved.fileSize,
+        fileName: content.fileName,
+      };
+
+      return {
+        success: true,
+        media: { items: [mediaItem], primary: mediaItem },
+      };
+    } catch (err) {
+      logger.error("文件处理失败：", err);
+      return { success: false, errorMessage: `文件处理失败：${getErrorMessage(err)}` };
+    }
   },
 };
 
@@ -201,7 +355,7 @@ const unsupportedMessageHandler: MessageHandler = {
 
   validate: () => ({
     valid: false,
-    errorMessage: "暂不支持该类型消息，请发送文本或图片消息。",
+    errorMessage: "暂不支持该类型消息，请发送文本、图片、语音、视频或文件。",
   }),
 
   handle: async () => {
@@ -213,6 +367,9 @@ const unsupportedMessageHandler: MessageHandler = {
 const messageHandlers: MessageHandler[] = [
   textMessageHandler,
   pictureMessageHandler,
+  audioMessageHandler,
+  videoMessageHandler,
+  fileMessageHandler,
   unsupportedMessageHandler, // 兜底处理器必须放在最后
 ];
 
@@ -282,44 +439,84 @@ export function getDingTalkRuntimeState(accountId: string) {
   return runtimeState.get(`${PLUGIN_ID}:${accountId}`);
 }
 
+// ============================================================================
+// 媒体下载与保存
+// ============================================================================
+
+/** 媒体下载保存选项 */
+interface DownloadMediaOptions {
+  /** 下载码 */
+  downloadCode: string;
+  /** 账户配置 */
+  account: ResolvedDingTalkAccount;
+  /** 媒体类型（用于日志） */
+  mediaKind: MediaKind;
+  /** 文件扩展名（可选，用于确定 MIME 和文件后缀） */
+  extension?: string;
+  /** 原始文件名（可选，用于保存时保留后缀） */
+  fileName?: string;
+  /** 强制指定的 contentType */
+  contentType?: string;
+}
+
+/** 媒体下载保存结果 */
+interface DownloadMediaResult {
+  path: string;
+  contentType: string;
+  fileSize: number;
+}
+
 /**
- * 下载钉钉图片并保存到本地
- * @param downloadCode - 图片下载码
- * @param account - 钉钉账户配置
- * @returns 保存的媒体信息
+ * 下载钉钉媒体文件并保存到本地（通用函数）
+ * 失败时直接抛出错误，错误消息可直接展示给用户
  */
-async function downloadAndSaveImage(
-  downloadCode: string,
-  account: ResolvedDingTalkAccount
-): Promise<{ path: string; contentType: string } | undefined> {
+async function downloadAndSaveMedia(
+  options: DownloadMediaOptions
+): Promise<DownloadMediaResult> {
+  const { downloadCode, account, mediaKind, fileName } = options;
   const pluginRuntime = getDingTalkRuntime();
 
-  try {
-    // 1. 获取下载链接
-    const downloadUrl = await getFileDownloadUrl(downloadCode, account);
-    logger.log("获取图片下载链接成功");
+  const kindLabel = {
+    picture: "图片",
+    audio: "语音",
+    video: "视频",
+    file: "文件",
+  }[mediaKind];
 
-    // 2. 下载图片
-    const buffer = await downloadFromUrl(downloadUrl);
-    logger.log(`下载图片成功，大小: ${(buffer.length / 1024).toFixed(2)} KB`);
+  // 1. 获取下载链接
+  const downloadUrl = await getFileDownloadUrl(downloadCode, account);
+  logger.log(`获取${kindLabel}下载链接成功`);
 
-    // 3. 使用 OpenClaw 的 media 工具保存图片
-    // contentType 传 undefined，让 OpenClaw 自动检测
-    const saved = await pluginRuntime.channel.media.saveMediaBuffer(
-      buffer,
-      undefined,
-      "inbound"
-    );
+  // 2. 下载文件
+  const buffer = await downloadFromUrl(downloadUrl);
+  const sizeStr = buffer.length > 1024 * 1024
+    ? `${(buffer.length / 1024 / 1024).toFixed(2)} MB`
+    : `${(buffer.length / 1024).toFixed(2)} KB`;
+  logger.log(`下载${kindLabel}成功，大小: ${sizeStr}`);
 
-    logger.log(`图片已保存到: ${saved.path}`);
-    return {
-      path: saved.path,
-      contentType: saved.contentType ?? "image/png",
-    };
-  } catch (err) {
-    logger.error("下载或保存图片失败:", err);
-    return undefined;
+  // 3. 使用 OpenClaw 的 media 工具保存，让 OpenClaw 自己处理文件名和后缀
+  const saved = await pluginRuntime.channel.media.saveMediaBuffer(
+    buffer,
+    undefined, // contentType: 让 OpenClaw 自动检测
+    "inbound",
+    buffer.length, // maxBytes: 使用实际大小，避免默认 5MB 限制
+    fileName // originalFilename: 直接传原始文件名
+  );
+
+  logger.log(`${kindLabel}已保存到: ${saved.path}`);
+  return {
+    path: saved.path,
+    contentType: saved.contentType ?? "application/octet-stream",
+    fileSize: buffer.length,
+  };
+}
+
+/** 提取错误消息（不含堆栈） */
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
   }
+  return String(err);
 }
 
 /**
@@ -493,7 +690,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         logger.log(`no response generated for message from ${sender.label}`);
       }
     } catch (error) {
-      logger.error("异步处理消息出错:", error);
+      logger.error("处理消息出错:", error);
       recordChannelRuntimeState({
         channel: PLUGIN_ID,
         accountId,
@@ -554,15 +751,18 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
           return processMessageAsync(data, result.media);
         })
         .catch((err) => {
-          logger.error(`处理 ${data.msgtype} 消息失败:`, err);
+          const errMsg = getErrorMessage(err);
+          logger.error(`处理 ${data.msgtype} 消息失败:`, err); // 保留完整错误对象用于日志
+          replyError(data.sessionWebhook, `消息处理失败：${errMsg}`);
         });
     } catch (error) {
-      logger.error("解析消息出错:", error);
+      const errMsg = getErrorMessage(error);
+      logger.error("解析消息出错:", error); // 保留完整错误对象用于日志
       recordChannelRuntimeState({
         channel: PLUGIN_ID,
         accountId,
         state: {
-          lastError: error instanceof Error ? error.message : String(error),
+          lastError: errMsg,
         },
       });
       client.socketCallBackResponse(message.headers.messageId, { status: "FAILURE" });
