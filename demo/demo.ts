@@ -443,6 +443,61 @@ async function sendTextToUser(userId: string, content: string, robotCode: string
 }
 
 /**
+ * 主动发送单聊 Markdown 消息给指定用户（使用 sampleMarkdown）
+ * @param userId - 接收者用户 ID（senderStaffId）
+ * @param title - Markdown 标题（可选）
+ * @param text - Markdown 内容
+ * @param robotCode - 机器人编码（CLIENT_ID）
+ */
+async function sendMarkdownToUser(
+  userId: string,
+  text: string,
+  robotCode: string,
+  title?: string
+): Promise<BatchSendOTOResponse> {
+  console.log('\n========== 主动发送单聊 Markdown 消息 ==========');
+  const accessToken = await getAccessToken();
+  const robotClient = createRobotClient();
+
+  const headers = new robot_1_0.BatchSendOTOHeaders({
+    xAcsDingtalkAccessToken: accessToken
+  });
+
+  // 构造 msgParam，title 可选
+  const msgParamObj: { text: string; title?: string } = { text };
+  if (title !== undefined) {
+    msgParamObj.title = title;
+  }
+  const msgParam = JSON.stringify(msgParamObj);
+
+  const requestData = {
+    robotCode,
+    userIds: [userId],
+    msgKey: 'sampleMarkdown',
+    msgParam
+  };
+  console.log('📤 请求参数:', JSON.stringify(requestData, null, 2));
+
+  const request = new robot_1_0.BatchSendOTORequest({
+    robotCode,
+    userIds: [userId],
+    msgKey: 'sampleMarkdown',
+    msgParam
+  });
+
+  const response = await robotClient.batchSendOTOWithOptions(
+    request,
+    headers,
+    new $Util.RuntimeOptions({})
+  );
+
+  console.log('📥 响应数据:', JSON.stringify(response.body, null, 2));
+  console.log('✅ 主动发送单聊 Markdown 消息完成');
+  console.log('========================================\n');
+  return response;
+}
+
+/**
  * 启动"嘿嘿"定时任务
  * @param userId - 用户 ID
  * @param robotCode - 机器人编码
@@ -572,6 +627,69 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           };
           await replyMessage(data.sessionWebhook, replyBody);
         }
+        return { status: 'SUCCESS' };
+      }
+
+      // 检测 "md" 消息，测试 sampleMarkdown 的 title 是否必填
+      if (content === 'md') {
+        console.log('🎯 检测到 "md" 消息，测试 sampleMarkdown');
+        
+        const markdownText = [
+          '## 🧪 sampleMarkdown 测试',
+          '',
+          '这是一条通过 **BatchSendOTO API** 发送的 Markdown 消息。',
+          '',
+          '### 支持的格式',
+          '',
+          '- **加粗文字**',
+          '- *斜体文字*',
+          '- `行内代码`',
+          '- [链接](https://open.dingtalk.com)',
+          '',
+          '> 引用文字',
+          '',
+          '| 列1 | 列2 |',
+          '|-----|-----|',
+          '| A   | B   |',
+        ].join('\n');
+
+        try {
+          // 第一条：有 title
+          console.log('\n📤 发送第 1 条消息（有 title）...');
+          await sendMarkdownToUser(
+            senderStaffId,
+            markdownText,
+            robotCode,
+            '有 Title 的消息'  // 有 title
+          );
+
+          // 第二条：没有 title
+          console.log('\n📤 发送第 2 条消息（没有 title）...');
+          await sendMarkdownToUser(
+            senderStaffId,
+            markdownText + '\n\n---\n\n⚠️ **这条消息没有传 title 参数**',
+            robotCode
+            // 不传 title
+          );
+
+          console.log('✅ 两条 sampleMarkdown 消息发送完成');
+        } catch (err) {
+          const error = err as Error;
+          console.error('❌ 发送 sampleMarkdown 失败:', error.message);
+          
+          // 通过 webhook 回复错误信息
+          if (data.sessionWebhook) {
+            const errorReply: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '发送失败',
+                text: `## ❌ sampleMarkdown 发送失败\n\n**错误信息：**\n\n\`\`\`\n${error.message}\n\`\`\``
+              }
+            };
+            await replyMessage(data.sessionWebhook, errorReply);
+          }
+        }
+        
         return { status: 'SUCCESS' };
       }
 

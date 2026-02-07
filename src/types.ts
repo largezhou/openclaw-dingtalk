@@ -197,7 +197,7 @@ export interface TextReplyBody {
 export interface MarkdownReplyBody {
   msgtype: "markdown";
   markdown: {
-    title: string;
+    title?: string;  // title 可选
     text: string;
   };
   at?: AtConfig;

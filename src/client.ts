@@ -91,8 +91,6 @@ export async function replyViaWebhook(
     isAtAll?: boolean;
     /** 使用 markdown 格式发送（默认 true） */
     useMarkdown?: boolean;
-    /** markdown 消息的标题（默认为内容前 20 个字符） */
-    markdownTitle?: string;
   }
 ): Promise<WebhookResponse> {
   const useMarkdown = options?.useMarkdown ?? true;
@@ -100,19 +98,17 @@ export async function replyViaWebhook(
   let body: TextReplyBody | MarkdownReplyBody;
   
   if (useMarkdown) {
-    // 使用 markdown 格式
-    const title = options?.markdownTitle ?? content.slice(0, 20).replace(/\n/g, " ");
+    // 使用 markdown 格式（不传 title）
     body = {
       msgtype: "markdown",
       markdown: {
-        title,
         text: content,
       },
       at: {
         atUserIds: options?.atUserIds ?? [],
         isAtAll: options?.isAtAll ?? false,
       },
-    };
+    } as MarkdownReplyBody;
   } else {
     // 使用纯文本格式
     body = {
@@ -139,12 +135,15 @@ export async function replyViaWebhook(
 }
 
 /**
- * 主动发送单聊文本消息给指定用户
+ * 主动发送单聊消息给指定用户（默认使用 markdown 格式）
  */
 export async function sendTextMessage(
   userId: string,
   content: string,
-  options: SendMessageOptions
+  options: SendMessageOptions & {
+    /** 使用 markdown 格式发送（默认 true） */
+    useMarkdown?: boolean;
+  }
 ): Promise<SendMessageResult> {
   const accessToken = await getAccessToken(options.account);
   const robotClient = createRobotClient();
@@ -153,12 +152,25 @@ export async function sendTextMessage(
     xAcsDingtalkAccessToken: accessToken,
   });
 
-  const msgParam = JSON.stringify({ content });
+  const useMarkdown = options.useMarkdown ?? true;
+  
+  let msgKey: string;
+  let msgParam: string;
+  
+  if (useMarkdown) {
+    // 使用 markdown 格式（不传 title）
+    msgKey = "sampleMarkdown";
+    msgParam = JSON.stringify({ text: content });
+  } else {
+    // 使用纯文本格式
+    msgKey = "sampleText";
+    msgParam = JSON.stringify({ content });
+  }
 
   const request = new robot_1_0.BatchSendOTORequest({
     robotCode: options.account.clientId,
     userIds: [userId],
-    msgKey: "sampleText",
+    msgKey,
     msgParam,
   });
 
