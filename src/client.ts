@@ -1,7 +1,7 @@
 import * as $OpenApi from "@alicloud/openapi-client";
 import * as $Util from "@alicloud/tea-util";
 import dingtalk from "@alicloud/dingtalk";
-import type { ResolvedDingTalkAccount, WebhookResponse } from "./types.js";
+import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody, TextReplyBody } from "./types.js";
 
 const { oauth2_1_0, robot_1_0 } = dingtalk;
 
@@ -81,7 +81,7 @@ export interface SendMessageResult {
 }
 
 /**
- * 通过 sessionWebhook 回复消息
+ * 通过 sessionWebhook 回复消息（支持 markdown 格式）
  */
 export async function replyViaWebhook(
   webhook: string,
@@ -89,18 +89,43 @@ export async function replyViaWebhook(
   options?: {
     atUserIds?: string[];
     isAtAll?: boolean;
+    /** 使用 markdown 格式发送（默认 true） */
+    useMarkdown?: boolean;
+    /** markdown 消息的标题（默认为内容前 20 个字符） */
+    markdownTitle?: string;
   }
 ): Promise<WebhookResponse> {
-  const body = {
-    msgtype: "text",
-    text: {
-      content,
-    },
-    at: {
-      atUserIds: options?.atUserIds ?? [],
-      isAtAll: options?.isAtAll ?? false,
-    },
-  };
+  const useMarkdown = options?.useMarkdown ?? true;
+  
+  let body: TextReplyBody | MarkdownReplyBody;
+  
+  if (useMarkdown) {
+    // 使用 markdown 格式
+    const title = options?.markdownTitle ?? content.slice(0, 20).replace(/\n/g, " ");
+    body = {
+      msgtype: "markdown",
+      markdown: {
+        title,
+        text: content,
+      },
+      at: {
+        atUserIds: options?.atUserIds ?? [],
+        isAtAll: options?.isAtAll ?? false,
+      },
+    };
+  } else {
+    // 使用纯文本格式
+    body = {
+      msgtype: "text",
+      text: {
+        content,
+      },
+      at: {
+        atUserIds: options?.atUserIds ?? [],
+        isAtAll: options?.isAtAll ?? false,
+      },
+    };
+  }
 
   const response = await fetch(webhook, {
     method: "POST",

@@ -174,3 +174,34 @@ export interface WebhookResponse {
   errcode: number;
   errmsg?: string;
 }
+
+// ======================= 回复消息体类型 =======================
+
+/** @ 配置 */
+export interface AtConfig {
+  atUserIds?: string[];
+  atMobiles?: string[];
+  isAtAll?: boolean;
+}
+
+/** 回复消息体 - 文本 */
+export interface TextReplyBody {
+  msgtype: "text";
+  text: {
+    content: string;
+  };
+  at?: AtConfig;
+}
+
+/** 回复消息体 - Markdown */
+export interface MarkdownReplyBody {
+  msgtype: "markdown";
+  markdown: {
+    title: string;
+    text: string;
+  };
+  at?: AtConfig;
+}
+
+/** 回复消息体联合类型 */
+export type ReplyBody = TextReplyBody | MarkdownReplyBody;

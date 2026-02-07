@@ -123,6 +123,16 @@ export interface TextReplyBody {
   at?: AtConfig;
 }
 
+// 回复消息体 - Markdown（用于 sessionWebhook）
+export interface MarkdownReplyBody {
+  msgtype: 'markdown';
+  markdown: {
+    title: string;
+    text: string;
+  };
+  at?: AtConfig;
+}
+
 // 回复消息体 - 图片
 export interface ImageReplyBody {
   msgtype: 'image';
@@ -132,7 +142,7 @@ export interface ImageReplyBody {
 }
 
 // 回复消息体联合类型
-export type ReplyBody = TextReplyBody | ImageReplyBody;
+export type ReplyBody = TextReplyBody | MarkdownReplyBody | ImageReplyBody;
 
 // ======================= 旧版 oapi 接口类型 =======================
 

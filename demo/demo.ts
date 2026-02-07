@@ -19,6 +19,7 @@ import type {
   RobotMessageData,
   MessageResult,
   TextReplyBody,
+  MarkdownReplyBody,
   UploadMediaResult,
   MediaUploadResponse,
   WebhookResponse,
@@ -537,10 +538,11 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
 
         // 回复用户
         if (data.sessionWebhook) {
-          const replyBody: TextReplyBody = {
-            msgtype: 'text',
-            text: {
-              content: '😄 收到！我会每 30 秒给你发一次"嘿嘿"\n\n发送"停止嘿嘿"可以停止'
+          const replyBody: MarkdownReplyBody = {
+            msgtype: 'markdown',
+            markdown: {
+              title: '定时任务已启动',
+              text: `## 😄 收到！\n\n我会每 **30 秒** 给你发一次 "嘿嘿"\n\n> 发送 \`停止嘿嘿\` 可以停止`
             },
             at: {
               atUserIds: [senderStaffId],
@@ -557,10 +559,11 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
         const stopped = stopHeiHeiTimer(senderStaffId);
         
         if (data.sessionWebhook) {
-          const replyBody: TextReplyBody = {
-            msgtype: 'text',
-            text: {
-              content: stopped ? '✅ 已停止"嘿嘿"定时任务' : '⚠️ 你没有正在运行的"嘿嘿"任务'
+          const replyBody: MarkdownReplyBody = {
+            msgtype: 'markdown',
+            markdown: {
+              title: stopped ? '任务已停止' : '无运行任务',
+              text: stopped ? '## ✅ 已停止\n\n"嘿嘿" 定时任务已停止' : '## ⚠️ 提示\n\n你没有正在运行的 "嘿嘿" 任务'
             },
             at: {
               atUserIds: [senderStaffId],
@@ -572,11 +575,12 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
         return { status: 'SUCCESS' };
       }
 
-      // 其他文本消息：原样返回
-      const replyBody: TextReplyBody = {
-        msgtype: 'text',
-        text: {
-          content  // 直接回复同样的内容
+      // 其他文本消息：使用 markdown 格式回复
+      const replyBody: MarkdownReplyBody = {
+        msgtype: 'markdown',
+        markdown: {
+          title: '收到消息',
+          text: `## 📨 收到消息\n\n**你说：**\n\n> ${content}`
         },
         at: {
           atUserIds: [senderStaffId],  // @发送者
@@ -627,23 +631,60 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           const photoURL = uploadResult.url;
           console.log('✅ 上传成功，获取到 photoURL');
 
-          // 5. 使用 photoURL 发送图片给用户
-          console.log('\n📤 准备发送图片给用户...');
-          console.log('   使用上传后的 photoURL 发送本地图片');
-
-          if (conversationType === '1') {
-            // 单聊：使用 batchSendOTO
-            await sendImageToUser(senderStaffId, photoURL, robotCode);
-          } else {
-            // 群聊：使用 orgGroupSend
-            await sendImageToGroup(conversationId, photoURL, robotCode);
-          }
-
-          // 同时发送文字说明
-          const replyBody: TextReplyBody = {
-            msgtype: 'text',
-            text: {
-              content: `✅ 已收到图片并保存到本地\n📁 文件名: ${filename}\n📊 大小: ${(imageBuffer.length / 1024).toFixed(2)} KB\n\n👆 上面是我回发给你的图片`
+          // 5. 使用 markdown 发送图文混排消息（展示各种 markdown 语法）
+          console.log('\n📤 准备发送图文混排消息给用户...');
+          
+          const replyBody: MarkdownReplyBody = {
+            msgtype: 'markdown',
+            markdown: {
+              title: '图片已收到',
+              text: [
+                '# 一级标题：图片已收到',
+                '## 二级标题：处理结果',
+                '### 三级标题：详细信息',
+                '',
+                '---',
+                '',
+                '> 这是一段引用文字，用于展示引用效果',
+                '',
+                `![收到的图片](${photoURL})`,
+                '',
+                '**这是加粗文字** 和 *这是斜体文字*',
+                '',
+                '#### 表格展示',
+                '',
+                '| 属性 | 值 |',
+                '|---|---|',
+                `| 📁 文件名 | \`${filename}\` |`,
+                `| 📊 大小 | ${(imageBuffer.length / 1024).toFixed(2)} KB |`,
+                '| 📅 时间 | ' + new Date().toLocaleString() + ' |',
+                '',
+                '#### 无序列表',
+                '',
+                '- 列表项 1：支持图片',
+                '- 列表项 2：支持表格',
+                '- 列表项 3：支持各种格式',
+                '',
+                '#### 有序列表',
+                '',
+                '1. 第一步：接收图片',
+                '2. 第二步：保存到本地',
+                '3. 第三步：上传到钉钉',
+                '4. 第四步：返回结果',
+                '',
+                '---',
+                '',
+                '这是一个 [链接示例](https://open.dingtalk.com)，点击可以跳转',
+                '',
+                '行内代码：`console.log("Hello DingTalk!")`',
+                '',
+                '代码块：',
+                '```',
+                'function hello() {',
+                '  return "Hello, World!";',
+                '}',
+                '```'
+              ].join('\n')
             },
             at: {
               atUserIds: [senderStaffId],
@@ -662,10 +703,11 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
 
           // 通知用户处理失败
           if (data.sessionWebhook) {
-            const errorReply: TextReplyBody = {
-              msgtype: 'text',
-              text: {
-                content: `❌ 图片处理失败: ${err.message}`
+            const errorReply: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '图片处理失败',
+                text: `## ❌ 图片处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
               }
             };
             await replyMessage(data.sessionWebhook, errorReply);
@@ -735,19 +777,24 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
 
           // 回复用户
           const replyText = [
-            '✅ 收到富文本消息！',
+            '## ✅ 收到富文本消息！',
             '',
-            '📝 文本内容:',
-            textParts.length > 0 ? textParts.join('\n') : '（无文本）',
+            '### 📝 文本内容',
             '',
-            `🖼️ 包含 ${imageInfos.length} 张图片:`,
-            ...savedImages.map((name, i) => `   ${i + 1}. ${name}`)
+            textParts.length > 0 ? `> ${textParts.join('\n> ')}` : '（无文本）',
+            '',
+            `### 🖼️ 包含 ${imageInfos.length} 张图片`,
+            '',
+            ...savedImages.map((name, i) => `${i + 1}. \`${name}\``)
           ].join('\n');
 
           if (data.sessionWebhook) {
-            const replyBody: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: replyText },
+            const replyBody: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '收到富文本消息',
+                text: replyText
+              },
               at: { atUserIds: [senderStaffId], isAtAll: false }
             };
             await replyMessage(data.sessionWebhook, replyBody);
@@ -757,9 +804,12 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           const err = error as Error;
           console.error('\n❌ 处理富文本消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: `❌ 富文本消息处理失败: ${err.message}` }
+            const errorReply: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '富文本处理失败',
+                text: `## ❌ 富文本消息处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
+              }
             };
             await replyMessage(data.sessionWebhook, errorReply);
           }
@@ -801,22 +851,27 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
 
           // 回复用户
           const replyLines = [
-            '✅ 收到语音消息！',
+            '## ✅ 收到语音消息！',
             '',
-            `📁 文件名: ${filename}`,
-            `⏱️ 时长: ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'}`,
-            `📊 大小: ${(audioBuffer.length / 1024).toFixed(2)} KB`,
-            `🎵 格式: ${extension.toUpperCase()}`
+            '| 属性 | 值 |',
+            '|---|---|',
+            `| 📁 文件名 | \`${filename}\` |`,
+            `| ⏱️ 时长 | ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'} |`,
+            `| 📊 大小 | ${(audioBuffer.length / 1024).toFixed(2)} KB |`,
+            `| 🎵 格式 | ${extension.toUpperCase()} |`
           ];
 
           if (recognition) {
-            replyLines.push('', '🗣️ 语音识别结果:', recognition);
+            replyLines.push('', '### 🗣️ 语音识别结果', '', `> ${recognition}`);
           }
 
           if (data.sessionWebhook) {
-            const replyBody: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: replyLines.join('\n') },
+            const replyBody: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '收到语音消息',
+                text: replyLines.join('\n')
+              },
               at: { atUserIds: [senderStaffId], isAtAll: false }
             };
             await replyMessage(data.sessionWebhook, replyBody);
@@ -826,9 +881,12 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           const err = error as Error;
           console.error('\n❌ 处理音频消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: `❌ 音频处理失败: ${err.message}` }
+            const errorReply: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '音频处理失败',
+                text: `## ❌ 音频处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
+              }
             };
             await replyMessage(data.sessionWebhook, errorReply);
           }
@@ -875,19 +933,24 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
 
           // 回复用户
           const replyLines = [
-            '✅ 收到视频消息！',
+            '## ✅ 收到视频消息！',
             '',
-            `📁 文件名: ${filename}`,
-            `⏱️ 时长: ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'}`,
-            `📐 分辨率: ${width && height ? `${width}x${height}` : '未知'}`,
-            `📊 大小: ${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB`,
-            `🎬 格式: ${extension.toUpperCase()}`
+            '| 属性 | 值 |',
+            '|---|---|',
+            `| 📁 文件名 | \`${filename}\` |`,
+            `| ⏱️ 时长 | ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'} |`,
+            `| 📐 分辨率 | ${width && height ? `${width}x${height}` : '未知'} |`,
+            `| 📊 大小 | ${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB |`,
+            `| 🎬 格式 | ${extension.toUpperCase()} |`
           ];
 
           if (data.sessionWebhook) {
-            const replyBody: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: replyLines.join('\n') },
+            const replyBody: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '收到视频消息',
+                text: replyLines.join('\n')
+              },
               at: { atUserIds: [senderStaffId], isAtAll: false }
             };
             await replyMessage(data.sessionWebhook, replyBody);
@@ -897,9 +960,12 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           const err = error as Error;
           console.error('\n❌ 处理视频消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: `❌ 视频处理失败: ${err.message}` }
+            const errorReply: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '视频处理失败',
+                text: `## ❌ 视频处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
+              }
             };
             await replyMessage(data.sessionWebhook, errorReply);
           }
@@ -943,18 +1009,23 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
 
           // 回复用户
           const replyLines = [
-            '✅ 收到文件！',
+            '## ✅ 收到文件！',
             '',
-            `📁 原始文件名: ${fileName}`,
-            `💾 保存为: ${savedFileName}`,
-            `📊 大小: ${(fileBuffer.length / 1024).toFixed(2)} KB`,
-            `📝 类型: ${extension.toUpperCase() || '未知'}`
+            '| 属性 | 值 |',
+            '|---|---|',
+            `| 📁 原始文件名 | \`${fileName}\` |`,
+            `| 💾 保存为 | \`${savedFileName}\` |`,
+            `| 📊 大小 | ${(fileBuffer.length / 1024).toFixed(2)} KB |`,
+            `| 📝 类型 | ${extension.toUpperCase() || '未知'} |`
           ];
 
           if (data.sessionWebhook) {
-            const replyBody: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: replyLines.join('\n') },
+            const replyBody: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '收到文件',
+                text: replyLines.join('\n')
+              },
               at: { atUserIds: [senderStaffId], isAtAll: false }
             };
             await replyMessage(data.sessionWebhook, replyBody);
@@ -964,9 +1035,12 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           const err = error as Error;
           console.error('\n❌ 处理文件消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: TextReplyBody = {
-              msgtype: 'text',
-              text: { content: `❌ 文件处理失败: ${err.message}` }
+            const errorReply: MarkdownReplyBody = {
+              msgtype: 'markdown',
+              markdown: {
+                title: '文件处理失败',
+                text: `## ❌ 文件处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
+              }
             };
             await replyMessage(data.sessionWebhook, errorReply);
           }
@@ -996,7 +1070,7 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
  * @param webhook - sessionWebhook 地址
  * @param body - 消息体
  */
-async function replyMessage(webhook: string, body: TextReplyBody): Promise<WebhookResponse> {
+async function replyMessage(webhook: string, body: TextReplyBody | MarkdownReplyBody): Promise<WebhookResponse> {
   console.log('\n========== 通过 Webhook 回复消息 ==========');
   console.log('📤 Webhook URL:', webhook);
   console.log('📤 请求体:', JSON.stringify(body, null, 2));
