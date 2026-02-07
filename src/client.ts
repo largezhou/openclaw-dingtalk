@@ -94,21 +94,23 @@ export async function replyViaWebhook(
   }
 ): Promise<WebhookResponse> {
   const useMarkdown = options?.useMarkdown ?? true;
-  
+
   let body: TextReplyBody | MarkdownReplyBody;
-  
+
   if (useMarkdown) {
-    // 使用 markdown 格式（不传 title）
+    // 使用 markdown 格式（title 为内容前 10 个字符）
+    const title = content.slice(0, 10).replace(/\n/g, " ");
     body = {
       msgtype: "markdown",
       markdown: {
+        title,
         text: content,
       },
       at: {
         atUserIds: options?.atUserIds ?? [],
         isAtAll: options?.isAtAll ?? false,
       },
-    } as MarkdownReplyBody;
+    };
   } else {
     // 使用纯文本格式
     body = {
@@ -153,14 +155,15 @@ export async function sendTextMessage(
   });
 
   const useMarkdown = options.useMarkdown ?? true;
-  
+
   let msgKey: string;
   let msgParam: string;
-  
+
   if (useMarkdown) {
-    // 使用 markdown 格式（不传 title）
+    // 使用 markdown 格式（title 为内容前 10 个字符）
+    const title = content.slice(0, 10).replace(/\n/g, " ");
     msgKey = "sampleMarkdown";
-    msgParam = JSON.stringify({ text: content });
+    msgParam = JSON.stringify({ title, text: content });
   } else {
     // 使用纯文本格式
     msgKey = "sampleText";
