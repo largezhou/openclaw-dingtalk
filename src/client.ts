@@ -1,6 +1,7 @@
 import * as $OpenApi from "@alicloud/openapi-client";
 import * as $Util from "@alicloud/tea-util";
 import dingtalk from "@alicloud/dingtalk";
+import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody } from "./types.js";
 import { logger } from "./logger.js";
 
@@ -127,17 +128,37 @@ export async function replyViaWebhook(
   return result;
 }
 
+// ======================= 主动发送消息（BatchSendOTO） =======================
+
 /**
- * 主动发送单聊消息给指定用户（markdown 格式）
+ * 钉钉机器人消息类型（msgKey）
+ * @see https://open.dingtalk.com/document/orgapp/types-of-messages-sent-by-enterprise-robots
  */
-export async function sendTextMessage(
+export type DingTalkMsgKey =
+  | "sampleText"      // 文本
+  | "sampleMarkdown"  // Markdown
+  | "sampleImageMsg"  // 图片
+  | "sampleLink"      // 链接
+  | "sampleAudio"     // 语音
+  | "sampleVideo"     // 视频
+  | "sampleFile"      // 文件
+  | "sampleActionCard"  // 卡片
+  | "sampleActionCard2" // 卡片（独立跳转）
+  | "sampleActionCard3" // 卡片（竖向按钮）
+  | "sampleActionCard4" // 卡片（横向按钮）
+  | "sampleActionCard5" // 卡片（横向2按钮）
+  | "sampleActionCard6"; // 卡片（横向3按钮）
+
+/**
+ * 底层通用方法：主动发送单聊消息（BatchSendOTO）
+ * 所有 sendXxxMessage 方法都基于此方法实现
+ */
+async function sendOTOMessage(
   userId: string,
-  content: string,
+  msgKey: DingTalkMsgKey,
+  msgParam: Record<string, unknown>,
   options: SendMessageOptions
 ): Promise<SendMessageResult> {
-  const contentPreview = content.slice(0, 50).replace(/\n/g, " ");
-  logger.log(`[主动发送] 文本消息 | to: ${userId} | ${contentPreview}${content.length > 50 ? "..." : ""}`);
-
   const accessToken = await getAccessToken(options.account);
   const robotClient = createRobotClient();
 
@@ -145,15 +166,11 @@ export async function sendTextMessage(
     xAcsDingtalkAccessToken: accessToken,
   });
 
-  const title = content.slice(0, 10).replace(/\n/g, " ");
-  const msgKey = "sampleMarkdown";
-  const msgParam = JSON.stringify({ title, text: content });
-
   const request = new robot_1_0.BatchSendOTORequest({
     robotCode: options.account.clientId,
     userIds: [userId],
     msgKey,
-    msgParam,
+    msgParam: JSON.stringify(msgParam),
   });
 
   const response = await robotClient.batchSendOTOWithOptions(
@@ -163,12 +180,171 @@ export async function sendTextMessage(
   );
 
   const processQueryKey = response.body?.processQueryKey ?? `dingtalk-${Date.now()}`;
-  logger.log(`[主动发送] 文本消息发送成功 | messageId: ${processQueryKey}`);
 
   return {
     messageId: processQueryKey,
     chatId: userId,
   };
+}
+
+/**
+ * 发送文本消息（markdown 格式）
+ */
+export async function sendTextMessage(
+  userId: string,
+  content: string,
+  options: SendMessageOptions
+): Promise<SendMessageResult> {
+  const contentPreview = content.slice(0, 50).replace(/\n/g, " ");
+  logger.log(`[主动发送] 文本消息 | to: ${userId} | ${contentPreview}${content.length > 50 ? "..." : ""}`);
+
+  const title = content.slice(0, 10).replace(/\n/g, " ");
+  const result = await sendOTOMessage(userId, "sampleMarkdown", { title, text: content }, options);
+
+  logger.log(`[主动发送] 文本消息发送成功 | messageId: ${result.messageId}`);
+  return result;
+}
+
+/**
+ * 发送图片消息
+ * @param photoURL - 图片的公网可访问 URL
+ */
+export async function sendImageMessage(
+  userId: string,
+  photoURL: string,
+  options: SendMessageOptions
+): Promise<SendMessageResult> {
+  logger.log(`[主动发送] 图片消息 | to: ${userId} | photoURL: ${photoURL.slice(0, 80)}...`);
+
+  const result = await sendOTOMessage(userId, "sampleImageMsg", { photoURL }, options);
+
+  logger.log(`[主动发送] 图片消息发送成功 | messageId: ${result.messageId}`);
+  return result;
+}
+
+/**
+ * 发送语音消息
+ * @param mediaId - 语音文件的 mediaId（通过 uploadMedia 获取）
+ * @param duration - 语音时长（秒），可选
+ */
+export async function sendAudioMessage(
+  userId: string,
+  mediaId: string,
+  options: SendMessageOptions & {
+    duration?: string;
+  }
+): Promise<SendMessageResult> {
+  logger.log(`[主动发送] 语音消息 | to: ${userId} | mediaId: ${mediaId} | duration: ${options.duration ?? "未知"}`);
+
+  // 构建 msgParam，只包含有值的字段
+  const msgParam: Record<string, string> = { mediaId };
+  if (options.duration) {
+    msgParam.duration = options.duration;
+  }
+
+  const result = await sendOTOMessage(userId, "sampleAudio", msgParam, options);
+
+  logger.log(`[主动发送] 语音消息发送成功 | messageId: ${result.messageId}`);
+  return result;
+}
+
+/**
+ * 发送视频消息
+ * @param videoMediaId - 视频文件的 mediaId（通过 uploadMedia 获取）
+ * @param options.duration - 视频时长（毫秒），可选
+ * @param options.picMediaId - 视频封面图的 mediaId，可选
+ * @param options.width - 视频宽度（像素），可选
+ * @param options.height - 视频高度（像素），可选
+ */
+export async function sendVideoMessage(
+  userId: string,
+  videoMediaId: string,
+  options: SendMessageOptions & {
+    duration?: string;
+    picMediaId?: string;
+    width?: string;
+    height?: string;
+  }
+): Promise<SendMessageResult> {
+  logger.log(`[主动发送] 视频消息 | to: ${userId} | videoMediaId: ${videoMediaId}`);
+
+  // 构建 msgParam，只包含有值的字段
+  const msgParam: Record<string, string> = {
+    videoMediaId,
+    videoType: "mp4",
+  };
+  if (options.duration) {
+    msgParam.duration = options.duration;
+  }
+  if (options.picMediaId) {
+    msgParam.picMediaId = options.picMediaId;
+  }
+  if (options.width) {
+    msgParam.width = options.width;
+  }
+  if (options.height) {
+    msgParam.height = options.height;
+  }
+
+  const result = await sendOTOMessage(userId, "sampleVideo", msgParam, options);
+
+  logger.log(`[主动发送] 视频消息发送成功 | messageId: ${result.messageId}`);
+  return result;
+}
+
+/**
+ * 发送文件消息
+ * @param mediaId - 文件的 mediaId（通过 uploadMedia 获取）
+ * @param fileName - 文件名
+ * @param fileType - 文件扩展名（如 pdf、doc 等）
+ */
+export async function sendFileMessage(
+  userId: string,
+  mediaId: string,
+  fileName: string,
+  fileType: string,
+  options: SendMessageOptions
+): Promise<SendMessageResult> {
+  logger.log(`[主动发送] 文件消息 | to: ${userId} | fileName: ${fileName} | fileType: ${fileType}`);
+
+  const result = await sendOTOMessage(userId, "sampleFile", { mediaId, fileName, fileType }, options);
+
+  logger.log(`[主动发送] 文件消息发送成功 | messageId: ${result.messageId}`);
+  return result;
+}
+
+/**
+ * 发送链接消息
+ * @param title - 链接标题
+ * @param text - 链接描述
+ * @param messageUrl - 点击后跳转的 URL
+ * @param picUrl - 图片 URL（可选）
+ */
+export async function sendLinkMessage(
+  userId: string,
+  options: SendMessageOptions & {
+    title: string;
+    text: string;
+    messageUrl: string;
+    picUrl?: string;
+  }
+): Promise<SendMessageResult> {
+  logger.log(`[主动发送] 链接消息 | to: ${userId} | title: ${options.title}`);
+
+  const result = await sendOTOMessage(
+    userId,
+    "sampleLink",
+    {
+      title: options.title,
+      text: options.text,
+      messageUrl: options.messageUrl,
+      picUrl: options.picUrl ?? "",
+    },
+    options
+  );
+
+  logger.log(`[主动发送] 链接消息发送成功 | messageId: ${result.messageId}`);
+  return result;
 }
 
 // ======================= 探测 Bot =======================
@@ -260,11 +436,59 @@ export async function downloadFromUrl(url: string): Promise<Buffer> {
   return Buffer.from(arrayBuffer);
 }
 
-// ======================= 发送图片消息 =======================
+// ======================= 媒体文件上传 =======================
+
+/**
+ * 钉钉支持的媒体类型（media/upload 接口）
+ * - image: 图片，最大 20MB，支持 jpg/gif/png/bmp
+ * - voice: 语音，最大 2MB，支持 amr/mp3/wav
+ * - video: 视频，最大 20MB，支持 mp4
+ * - file: 普通文件，最大 20MB，支持 doc/docx/xls/xlsx/ppt/pptx/zip/pdf/rar
+ */
+export type DingTalkMediaType = "image" | "voice" | "video" | "file";
 
 export interface UploadMediaResult {
   mediaId: string;
+  /** 图片类型返回公网可访问 URL，其他类型返回空字符串 */
   url: string;
+  /** 媒体类型 */
+  type: DingTalkMediaType;
+}
+
+/**
+ * 根据 MIME 类型推断钉钉媒体类型
+ */
+export function inferMediaType(mimeType: string): DingTalkMediaType {
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType.startsWith("audio/")) {
+    return "voice";
+  }
+  if (mimeType.startsWith("video/")) {
+    return "video";
+  }
+  return "file";
+}
+
+/**
+ * 根据媒体类型获取对应的 Content-Type
+ */
+function getContentType(type: DingTalkMediaType, mimeType?: string): string {
+  if (mimeType) {
+    return mimeType;
+  }
+  switch (type) {
+    case "image":
+      return "image/png";
+    case "voice":
+      return "audio/amr";
+    case "video":
+      return "video/mp4";
+    case "file":
+    default:
+      return "application/octet-stream";
+  }
 }
 
 /**
@@ -272,22 +496,32 @@ export interface UploadMediaResult {
  * @param fileBuffer - 文件 Buffer
  * @param fileName - 文件名
  * @param account - 钉钉账户配置
- * @param type - 文件类型：image, voice, video, file
+ * @param options - 上传选项
  * @returns 包含 media_id 和公网可访问 URL 的对象
  */
 export async function uploadMedia(
   fileBuffer: Buffer,
   fileName: string,
   account: ResolvedDingTalkAccount,
-  type = "image"
+  options?: {
+    /** 媒体类型，不传则根据 mimeType 自动推断 */
+    type?: DingTalkMediaType;
+    /** MIME 类型，用于推断媒体类型和设置 Content-Type */
+    mimeType?: string;
+  }
 ): Promise<UploadMediaResult> {
+  const mimeType = options?.mimeType;
+  const type = options?.type ?? (mimeType ? inferMediaType(mimeType) : "image");
+  const contentType = getContentType(type, mimeType);
+
+  logger.log(`[上传媒体] type: ${type} | fileName: ${fileName} | size: ${fileBuffer.length} bytes`);
+
   const accessToken = await getAccessToken(account);
 
   // 使用 FormData 上传
   const formData = new FormData();
-  // 将 Buffer 转换为 Uint8Array 以兼容 Blob
   const uint8Array = new Uint8Array(fileBuffer);
-  const blob = new Blob([uint8Array], { type: "image/png" });
+  const blob = new Blob([uint8Array], { type: contentType });
   formData.append("media", blob, fileName);
   formData.append("type", type);
 
@@ -306,58 +540,81 @@ export async function uploadMedia(
   };
 
   if (result.errcode === 0 && result.media_id) {
-    // 构造公网可访问的 URL
-    const photoURL = `https://oapi.dingtalk.com/media/downloadFile?access_token=${accessToken}&media_id=${result.media_id}`;
+    logger.log(`[上传媒体] 上传成功 | mediaId: ${result.media_id}`);
+
+    // 只有图片类型才构造公网可访问的 URL
+    const url = type === "image"
+      ? `https://oapi.dingtalk.com/media/downloadFile?access_token=${accessToken}&media_id=${result.media_id}`
+      : "";
+
     return {
       mediaId: result.media_id,
-      url: photoURL,
+      url,
+      type,
     };
   }
 
+  logger.error(`[上传媒体] 上传失败: ${result.errmsg ?? JSON.stringify(result)}`);
   throw new Error(`上传媒体文件失败: ${result.errmsg ?? JSON.stringify(result)}`);
 }
 
+// ======================= 媒体时长解析 =======================
+
 /**
- * 发送单聊图片消息
- * @param userId - 接收者用户 ID
- * @param photoURL - 图片的公网可访问 URL
- * @param options - 发送选项
+ * 获取音频/视频文件的时长（秒）
+ * @param buffer - 文件 Buffer
+ * @param contentType - MIME 类型（可选）
+ * @param fileName - 文件名（可选）
+ * @returns 时长（秒），如果无法解析则返回 undefined
  */
-export async function sendImageMessage(
-  userId: string,
-  photoURL: string,
-  options: SendMessageOptions
-): Promise<SendMessageResult> {
-  logger.log(`[主动发送] 图片消息 | to: ${userId} | photoURL: ${photoURL.slice(0, 80)}...`);
+export async function getMediaDurationSeconds(
+  buffer: Buffer,
+  contentType?: string,
+  fileName?: string
+): Promise<number | undefined> {
+  try {
+    const fileInfo: IFileInfo | undefined =
+      contentType || fileName
+        ? {
+            mimeType: contentType,
+            size: buffer.byteLength,
+            path: fileName,
+          }
+        : undefined;
+    
+    const metadata = await parseBuffer(buffer, fileInfo, {
+      duration: true,
+      skipCovers: true,
+    });
+    
+    const durationSeconds = metadata.format.duration;
+    if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
+      const rounded = Math.max(1, Math.round(durationSeconds)); // 至少 1 秒
+      logger.log(`[媒体时长] 解析成功 | duration: ${rounded}s`);
+      return rounded;
+    }
+    logger.warn(`[媒体时长] 元数据中没有时长信息`);
+  } catch (err) {
+    // EndOfStreamError 等错误在某些格式（如 ogg/opus）中常见
+    logger.warn(`[媒体时长] 解析失败: ${err}`);
+  }
+  return undefined;
+}
 
-  const accessToken = await getAccessToken(options.account);
-  const robotClient = createRobotClient();
-
-  const headers = new robot_1_0.BatchSendOTOHeaders({
-    xAcsDingtalkAccessToken: accessToken,
-  });
-
-  const msgParam = JSON.stringify({ photoURL });
-
-  const request = new robot_1_0.BatchSendOTORequest({
-    robotCode: options.account.clientId,
-    userIds: [userId],
-    msgKey: "sampleImageMsg",
-    msgParam,
-  });
-
-  const response = await robotClient.batchSendOTOWithOptions(
-    request,
-    headers,
-    new $Util.RuntimeOptions({})
-  );
-
-  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-img-${Date.now()}`;
-
-  logger.log(`[主动发送] 图片消息发送成功 | messageId: ${processQueryKey}`);
-
-  return {
-    messageId: processQueryKey,
-    chatId: userId,
-  };
+/**
+ * 根据文件大小估算语音时长（秒）
+ * 用于无法解析元数据时的兜底方案
+ * 
+ * 估算依据：
+ * - 普通语音文件平均比特率约 32-64 kbps
+ * - 使用 48 kbps 作为估算基准
+ */
+export function estimateAudioDurationSeconds(bufferSize: number): number {
+  const kbps = 48; // 估算比特率
+  const bytes = bufferSize;
+  const bits = bytes * 8;
+  const seconds = bits / (kbps * 1000);
+  const estimated = Math.max(1, Math.round(seconds)); // 至少 1 秒
+  logger.log(`[媒体时长] 根据文件大小估算 | size: ${bytes} bytes | estimated: ${estimated}s`);
+  return estimated;
 }

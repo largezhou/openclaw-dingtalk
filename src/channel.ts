@@ -17,7 +17,7 @@ import {
   resolveDingTalkAccount,
 } from "./accounts.js";
 import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount } from "./types.js";
-import { sendTextMessage, sendImageMessage, uploadMedia, probeDingTalkBot } from "./client.js";
+import { sendTextMessage, sendImageMessage, sendFileMessage, uploadMedia, probeDingTalkBot, inferMediaType } from "./client.js";
 import { logger } from "./logger.js";
 import { monitorDingTalkProvider } from "./monitor.js";
 import { dingtalkOnboardingAdapter } from "./onboarding.js";
@@ -268,44 +268,58 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       return { channel: PLUGIN_ID, ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, cfg }) => {
-      const account = resolveDingTalkAccount({ cfg });
-
-      // 如果有媒体 URL，尝试发送图片
-      if (mediaUrl) {
-        try {
-          logger.log(`准备发送图片: ${mediaUrl}`);
-
-          // 使用 OpenClaw 的 loadWebMedia 加载媒体（支持 URL、本地路径、file://、~ 等）
-          const media = await loadWebMedia(mediaUrl);
-          logger.log(`加载图片成功，大小: ${(media.buffer.length / 1024).toFixed(2)} KB`);
-
-          // 上传到钉钉
-          const fileName = media.fileName || path.basename(mediaUrl) || `image_${Date.now()}.png`;
-          const uploadResult = await uploadMedia(media.buffer, fileName, account);
-          logger.log(`上传图片成功，photoURL: ${uploadResult.url}`);
-
-          // 发送图片消息
-          const imageResult = await sendImageMessage(to, uploadResult.url, { account });
-          logger.log(`发送图片消息成功`);
-
-          // 如果有文本，再发送文本消息
-          if (text?.trim()) {
-            await sendTextMessage(to, text, { account });
-          }
-
-          return { channel: PLUGIN_ID, ...imageResult };
-        } catch (err) {
-          logger.error("发送图片失败:", err);
-          // 降级：发送文本消息附带链接
-          const fallbackText = text ? `${text}\n\n📎 图片: ${mediaUrl}` : `📎 图片: ${mediaUrl}`;
-          const result = await sendTextMessage(to, fallbackText, { account });
-          return { channel: PLUGIN_ID, ...result };
-        }
+      // 没有媒体 URL，提前返回
+      if (!mediaUrl) {
+        logger.warn("[sendMedia] 没有 mediaUrl，跳过");
+        return { channel: PLUGIN_ID, messageId: "", chatId: to };
       }
 
-      // 没有媒体，只发送文本
-      const result = await sendTextMessage(to, text ?? "", { account });
-      return { channel: PLUGIN_ID, ...result };
+      const account = resolveDingTalkAccount({ cfg });
+
+      try {
+        logger.log(`准备发送媒体: ${mediaUrl}`);
+
+        // 使用 OpenClaw 的 loadWebMedia 加载媒体（支持 URL、本地路径、file://、~ 等）
+        const media = await loadWebMedia(mediaUrl);
+        const mimeType = media.contentType ?? "application/octet-stream";
+        const mediaType = inferMediaType(mimeType);
+        
+        logger.log(`加载媒体成功 | type: ${mediaType} | mimeType: ${mimeType} | size: ${(media.buffer.length / 1024).toFixed(2)} KB`);
+
+        // 上传到钉钉
+        const fileName = media.fileName || path.basename(mediaUrl) || `file_${Date.now()}`;
+        const uploadResult = await uploadMedia(media.buffer, fileName, account, {
+          mimeType,
+          type: mediaType,
+        });
+
+        // 统一使用文件发送（语音/视频因格式限制和参数要求，也降级为文件）
+        const ext = path.extname(fileName).slice(1) || "file";
+        let sendResult: { messageId: string; chatId: string };
+
+        if (mediaType === "image") {
+          // 图片使用 photoURL
+          sendResult = await sendImageMessage(to, uploadResult.url, { account });
+        } else {
+          // 语音、视频、文件统一使用文件发送
+          sendResult = await sendFileMessage(to, uploadResult.mediaId, fileName, ext, { account });
+        }
+
+        logger.log(`发送${mediaType}消息成功（${mediaType !== "image" ? "文件形式" : "图片形式"}）`);
+
+        // 如果有文本，再发送文本消息
+        if (text?.trim()) {
+          await sendTextMessage(to, text, { account });
+        }
+
+        return { channel: PLUGIN_ID, ...sendResult };
+      } catch (err) {
+        logger.error("发送媒体失败:", err);
+        // 降级：发送文本消息附带链接
+        const fallbackText = text ? `${text}\n\n📎 附件: ${mediaUrl}` : `📎 附件: ${mediaUrl}`;
+        const result = await sendTextMessage(to, fallbackText, { account });
+        return { channel: PLUGIN_ID, ...result };
+      }
     },
   },
   status: {
