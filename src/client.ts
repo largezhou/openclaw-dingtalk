@@ -1,7 +1,8 @@
 import * as $OpenApi from "@alicloud/openapi-client";
 import * as $Util from "@alicloud/tea-util";
 import dingtalk from "@alicloud/dingtalk";
-import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody, TextReplyBody } from "./types.js";
+import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody } from "./types.js";
+import { logger } from "./logger.js";
 
 const { oauth2_1_0, robot_1_0 } = dingtalk;
 
@@ -81,7 +82,7 @@ export interface SendMessageResult {
 }
 
 /**
- * 通过 sessionWebhook 回复消息（支持 markdown 格式）
+ * 通过 sessionWebhook 回复消息（markdown 格式）
  */
 export async function replyViaWebhook(
   webhook: string,
@@ -89,41 +90,23 @@ export async function replyViaWebhook(
   options?: {
     atUserIds?: string[];
     isAtAll?: boolean;
-    /** 使用 markdown 格式发送（默认 true） */
-    useMarkdown?: boolean;
   }
 ): Promise<WebhookResponse> {
-  const useMarkdown = options?.useMarkdown ?? true;
+  const contentPreview = content.slice(0, 50).replace(/\n/g, " ");
+  logger.log(`[回复消息] via Webhook | ${contentPreview}${content.length > 50 ? "..." : ""}`);
 
-  let body: TextReplyBody | MarkdownReplyBody;
-
-  if (useMarkdown) {
-    // 使用 markdown 格式（title 为内容前 10 个字符）
-    const title = content.slice(0, 10).replace(/\n/g, " ");
-    body = {
-      msgtype: "markdown",
-      markdown: {
-        title,
-        text: content,
-      },
-      at: {
-        atUserIds: options?.atUserIds ?? [],
-        isAtAll: options?.isAtAll ?? false,
-      },
-    };
-  } else {
-    // 使用纯文本格式
-    body = {
-      msgtype: "text",
-      text: {
-        content,
-      },
-      at: {
-        atUserIds: options?.atUserIds ?? [],
-        isAtAll: options?.isAtAll ?? false,
-      },
-    };
-  }
+  const title = content.slice(0, 10).replace(/\n/g, " ");
+  const body: MarkdownReplyBody = {
+    msgtype: "markdown",
+    markdown: {
+      title,
+      text: content,
+    },
+    at: {
+      atUserIds: options?.atUserIds ?? [],
+      isAtAll: options?.isAtAll ?? false,
+    },
+  };
 
   const response = await fetch(webhook, {
     method: "POST",
@@ -133,20 +116,28 @@ export async function replyViaWebhook(
     body: JSON.stringify(body),
   });
 
-  return (await response.json()) as WebhookResponse;
+  const result = (await response.json()) as WebhookResponse;
+
+  if (result.errcode === 0) {
+    logger.log(`[回复消息] 发送成功`);
+  } else {
+    logger.error(`[回复消息] 发送失败: ${result.errmsg ?? JSON.stringify(result)}`);
+  }
+
+  return result;
 }
 
 /**
- * 主动发送单聊消息给指定用户（默认使用 markdown 格式）
+ * 主动发送单聊消息给指定用户（markdown 格式）
  */
 export async function sendTextMessage(
   userId: string,
   content: string,
-  options: SendMessageOptions & {
-    /** 使用 markdown 格式发送（默认 true） */
-    useMarkdown?: boolean;
-  }
+  options: SendMessageOptions
 ): Promise<SendMessageResult> {
+  const contentPreview = content.slice(0, 50).replace(/\n/g, " ");
+  logger.log(`[主动发送] 文本消息 | to: ${userId} | ${contentPreview}${content.length > 50 ? "..." : ""}`);
+
   const accessToken = await getAccessToken(options.account);
   const robotClient = createRobotClient();
 
@@ -154,21 +145,9 @@ export async function sendTextMessage(
     xAcsDingtalkAccessToken: accessToken,
   });
 
-  const useMarkdown = options.useMarkdown ?? true;
-
-  let msgKey: string;
-  let msgParam: string;
-
-  if (useMarkdown) {
-    // 使用 markdown 格式（title 为内容前 10 个字符）
-    const title = content.slice(0, 10).replace(/\n/g, " ");
-    msgKey = "sampleMarkdown";
-    msgParam = JSON.stringify({ title, text: content });
-  } else {
-    // 使用纯文本格式
-    msgKey = "sampleText";
-    msgParam = JSON.stringify({ content });
-  }
+  const title = content.slice(0, 10).replace(/\n/g, " ");
+  const msgKey = "sampleMarkdown";
+  const msgParam = JSON.stringify({ title, text: content });
 
   const request = new robot_1_0.BatchSendOTORequest({
     robotCode: options.account.clientId,
@@ -183,8 +162,8 @@ export async function sendTextMessage(
     new $Util.RuntimeOptions({})
   );
 
-  // 从响应中提取 processQueryKey 作为 messageId
   const processQueryKey = response.body?.processQueryKey ?? `dingtalk-${Date.now()}`;
+  logger.log(`[主动发送] 文本消息发送成功 | messageId: ${processQueryKey}`);
 
   return {
     messageId: processQueryKey,
@@ -349,6 +328,8 @@ export async function sendImageMessage(
   photoURL: string,
   options: SendMessageOptions
 ): Promise<SendMessageResult> {
+  logger.log(`[主动发送] 图片消息 | to: ${userId} | photoURL: ${photoURL.slice(0, 80)}...`);
+
   const accessToken = await getAccessToken(options.account);
   const robotClient = createRobotClient();
 
@@ -372,6 +353,8 @@ export async function sendImageMessage(
   );
 
   const processQueryKey = response.body?.processQueryKey ?? `dingtalk-img-${Date.now()}`;
+
+  logger.log(`[主动发送] 图片消息发送成功 | messageId: ${processQueryKey}`);
 
   return {
     messageId: processQueryKey,
