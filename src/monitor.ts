@@ -958,7 +958,23 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     });
   });
 
-  // 启动连接
+  // 启动连接 — 包装 connect 方法，确保所有调用（含 DWClient 内部自动重连）都不会产生 unhandled rejection
+  const originalConnect = client.connect.bind(client);
+  client.connect = () =>
+    originalConnect().catch((err: unknown) => {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error(`[${accountId}] DingTalk Stream 连接失败: ${errMsg}`);
+      recordChannelRuntimeState({
+        channel: PLUGIN_ID,
+        accountId,
+        state: {
+          running: false,
+          lastStopAt: Date.now(),
+          lastError: errMsg,
+        },
+      });
+    });
+
   client.connect();
 
   // 处理中止信号

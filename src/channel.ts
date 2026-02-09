@@ -307,7 +307,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         const media = await loadWebMedia(mediaUrl);
         const mimeType = media.contentType ?? "application/octet-stream";
         const mediaType = inferMediaType(mimeType);
-        
+
         logger.log(`加载媒体成功 | type: ${mediaType} | mimeType: ${mimeType} | size: ${(media.buffer.length / 1024).toFixed(2)} KB`);
 
         // 上传到钉钉
