@@ -1,7 +1,6 @@
 import * as $OpenApi from "@alicloud/openapi-client";
 import * as $Util from "@alicloud/tea-util";
 import dingtalk from "@alicloud/dingtalk";
-import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody } from "./types.js";
 import { logger } from "./logger.js";
 
@@ -556,65 +555,4 @@ export async function uploadMedia(
 
   logger.error(`[上传媒体] 上传失败: ${result.errmsg ?? JSON.stringify(result)}`);
   throw new Error(`上传媒体文件失败: ${result.errmsg ?? JSON.stringify(result)}`);
-}
-
-// ======================= 媒体时长解析 =======================
-
-/**
- * 获取音频/视频文件的时长（秒）
- * @param buffer - 文件 Buffer
- * @param contentType - MIME 类型（可选）
- * @param fileName - 文件名（可选）
- * @returns 时长（秒），如果无法解析则返回 undefined
- */
-export async function getMediaDurationSeconds(
-  buffer: Buffer,
-  contentType?: string,
-  fileName?: string
-): Promise<number | undefined> {
-  try {
-    const fileInfo: IFileInfo | undefined =
-      contentType || fileName
-        ? {
-            mimeType: contentType,
-            size: buffer.byteLength,
-            path: fileName,
-          }
-        : undefined;
-    
-    const metadata = await parseBuffer(buffer, fileInfo, {
-      duration: true,
-      skipCovers: true,
-    });
-    
-    const durationSeconds = metadata.format.duration;
-    if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
-      const rounded = Math.max(1, Math.round(durationSeconds)); // 至少 1 秒
-      logger.log(`[媒体时长] 解析成功 | duration: ${rounded}s`);
-      return rounded;
-    }
-    logger.warn(`[媒体时长] 元数据中没有时长信息`);
-  } catch (err) {
-    // EndOfStreamError 等错误在某些格式（如 ogg/opus）中常见
-    logger.warn(`[媒体时长] 解析失败: ${err}`);
-  }
-  return undefined;
-}
-
-/**
- * 根据文件大小估算语音时长（秒）
- * 用于无法解析元数据时的兜底方案
- * 
- * 估算依据：
- * - 普通语音文件平均比特率约 32-64 kbps
- * - 使用 48 kbps 作为估算基准
- */
-export function estimateAudioDurationSeconds(bufferSize: number): number {
-  const kbps = 48; // 估算比特率
-  const bytes = bufferSize;
-  const bits = bytes * 8;
-  const seconds = bits / (kbps * 1000);
-  const estimated = Math.max(1, Math.round(seconds)); // 至少 1 秒
-  logger.log(`[媒体时长] 根据文件大小估算 | size: ${bytes} bytes | estimated: ${estimated}s`);
-  return estimated;
 }
