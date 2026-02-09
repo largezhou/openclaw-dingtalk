@@ -1,6 +1,7 @@
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
+  formatPairingApproveHint,
   loadWebMedia,
   missingTargetError,
   type ChannelPlugin,
@@ -79,6 +80,9 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     nativeCommands: false,
     blockStreaming: true, // 钉钉不支持流式消息
   },
+  commands: {
+    enforceOwnerForCommands: true,
+  },
   reload: { configPrefixes: [`channels.${PLUGIN_ID}`] },
   configSchema: buildChannelConfigSchema(DingTalkConfigSchema),
   config: {
@@ -117,6 +121,26 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       configured: Boolean(account.clientId?.trim() && account.clientSecret?.trim()),
       tokenSource: account.tokenSource,
     }),
+    resolveAllowFrom: ({ cfg }) =>
+      resolveDingTalkAccount({ cfg }).allowFrom.map((entry) => String(entry)),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.replace(new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i"), "")),
+  },
+  security: {
+    resolveDmPolicy: ({ cfg }) => {
+      const account = resolveDingTalkAccount({ cfg });
+      return {
+        policy: "allowlist",
+        allowFrom: account.allowFrom,
+        policyPath: `channels.${PLUGIN_ID}.allowFrom`,
+        allowFromPath: `channels.${PLUGIN_ID}.`,
+        approveHint: formatPairingApproveHint(PLUGIN_ID),
+        normalizeEntry: (raw) => raw.replace(new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i"), ""),
+      };
+    },
   },
   messaging: {
     normalizeTarget: (target) => {

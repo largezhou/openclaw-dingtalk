@@ -44,6 +44,7 @@ export function resolveDingTalkAccount(params: {
     clientId: "",
     clientSecret: "",
     tokenSource: "none",
+    allowFrom: ["*"],
   };
 
   if (!dingtalkConfig) {
@@ -70,5 +71,6 @@ export function resolveDingTalkAccount(params: {
     clientId,
     clientSecret,
     tokenSource,
+    allowFrom: dingtalkConfig.allowFrom ?? ["*"],
   };
 }

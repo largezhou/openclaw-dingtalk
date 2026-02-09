@@ -10,6 +10,7 @@ OpenClaw 钉钉（DingTalk）渠道插件，使用 Stream 模式接入企业机�
 - ✅ **Markdown回复**：机器人回复 Markdown 格式
 - ✅ **图片消息收发**：接收用户发送的图片，支持发送本地/远程图片
 - ✅ **语音、视频、文件、图文混排**：接收用户发送语音、视频、文件、图文混排消息
+- ✅ **回复文件**：支持回复文件，音频、视频等统一按文件发送（按语音、视频发送，需要获取时长、视频封面，以后再支持）
 - ✅ **主动推送消息**：支持主动推送消息，可以配置提醒或定时任务
 
 ## 安装
@@ -62,9 +63,24 @@ openclaw channels add
      "ddingtalk": {
         "enabled": true,
         "clientId": "your_app_key",
-        "clientSecret": "your_app_secret"
+        "clientSecret": "your_app_secret",
+        "allowFrom": ["*"]
      }
    }
+}
+```
+
+### allowFrom 白名单
+
+`allowFrom` 控制哪些用户可以与机器人交互并执行命令：
+
+- **默认值**：`["*"]`（不配置的情况下，默认允许所有人）
+- **指定用户**：填入钉钉用户的 `staffId`，只有白名单内的用户才能使用命令（如 `/compact`、`/new` 等），白名单外的用户消息会被忽略
+- `allowFrom[0]` 同时作为主动推送消息（`openclaw send`）的默认目标
+
+```json
+{
+  "allowFrom": ["用户ID_1", "用户ID_2"]
 }
 ```
 

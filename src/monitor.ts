@@ -673,6 +673,18 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
 
   const account = resolveDingTalkAccount({ cfg: config, accountId });
 
+  /** 检查发送者是否在 allowFrom 白名单中 */
+  const isSenderAllowed = (senderId: string): boolean => {
+    const allowList = account.allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+    if (allowList.length === 0 || allowList.includes("*")) {
+      return true;
+    }
+    const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i");
+    return allowList
+      .map((entry) => entry.replace(prefixPattern, ""))
+      .includes(senderId);
+  };
+
   // Record starting state
   recordChannelRuntimeState({
     channel: PLUGIN_ID,
@@ -771,6 +783,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       WasMentioned: data.isInAtList,
       OriginatingChannel: PLUGIN_ID,
       OriginatingTo: sender.toAddress,
+      CommandAuthorized: isSenderAllowed(sender.senderId),
     };
 
     // 合并媒体字段

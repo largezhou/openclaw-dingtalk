@@ -14,6 +14,8 @@ export const DingTalkConfigSchema = z.object({
   clientId: z.string().optional(),
   /** 钉钉应用 AppSecret */
   clientSecret: z.string().optional(),
+  /** 允许的发送者白名单，默认 ["*"] 允许所有人 */
+  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
 });
 
 export type DingTalkConfig = z.infer<typeof DingTalkConfigSchema>;
@@ -36,6 +38,8 @@ export interface ResolvedDingTalkAccount {
   clientSecret: string;
   /** Token 来源 */
   tokenSource: "config" | "none";
+  /** 允许的发送者白名单，默认 ["*"] 允许所有人 */
+  allowFrom: Array<string | number>;
 }
 
 // ======================= Message Types =======================
