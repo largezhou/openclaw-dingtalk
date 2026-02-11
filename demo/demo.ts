@@ -107,6 +107,30 @@ function createRobotClient(): RobotClient {
 let cachedAccessToken: string | null = null;
 let tokenExpireTime = 0;
 
+// ======================= 群聊回复辅助 =======================
+
+/**
+ * 构建 MarkdownReplyBody
+ * 
+ * @param opts - 配置项
+ * @returns MarkdownReplyBody
+ */
+function buildMarkdownReply(opts: {
+  title: string;
+  text: string;
+  isGroup: boolean;
+  senderStaffId: string;
+  senderNick: string;
+  originalContent?: string;
+}): MarkdownReplyBody {
+  const { title, text } = opts;
+
+  return {
+    msgtype: 'markdown',
+    markdown: { title, text },
+  };
+}
+
 // ======================= 定时任务管理 =======================
 // 存储用户的定时任务 { userId: intervalId }
 const userTimers = new Map<string, NodeJS.Timeout>();
@@ -498,6 +522,104 @@ async function sendMarkdownToUser(
 }
 
 /**
+ * 使用 SDK 发送群聊文本消息
+ * @param openConversationId - 群会话 ID
+ * @param content - 消息内容
+ * @param robotCode - 机器人编码
+ */
+async function sendTextToGroup(openConversationId: string, content: string, robotCode: string): Promise<OrgGroupSendResponse> {
+  console.log('\n========== 发送群聊文本消息 ==========');
+  const accessToken = await getAccessToken();
+  const robotClient = createRobotClient();
+
+  const headers = new robot_1_0.OrgGroupSendHeaders({
+    xAcsDingtalkAccessToken: accessToken
+  });
+
+  const msgParam = JSON.stringify({ content });
+
+  const requestData = {
+    robotCode,
+    openConversationId,
+    msgKey: 'sampleText',
+    msgParam
+  };
+  console.log('📤 请求参数:', JSON.stringify(requestData, null, 2));
+
+  const request = new robot_1_0.OrgGroupSendRequest({
+    robotCode,
+    openConversationId,
+    msgKey: 'sampleText',
+    msgParam
+  });
+
+  const response = await robotClient.orgGroupSendWithOptions(
+    request,
+    headers,
+    new $Util.RuntimeOptions({})
+  );
+
+  console.log('📥 响应数据:', JSON.stringify(response.body, null, 2));
+  console.log('✅ 发送群聊文本消息完成');
+  console.log('========================================\n');
+  return response;
+}
+
+/**
+ * 使用 SDK 发送群聊 Markdown 消息
+ * @param openConversationId - 群会话 ID
+ * @param text - Markdown 内容
+ * @param robotCode - 机器人编码
+ * @param title - Markdown 标题（可选）
+ */
+async function sendMarkdownToGroup(
+  openConversationId: string,
+  text: string,
+  robotCode: string,
+  title?: string
+): Promise<OrgGroupSendResponse> {
+  console.log('\n========== 发送群聊 Markdown 消息 ==========');
+  const accessToken = await getAccessToken();
+  const robotClient = createRobotClient();
+
+  const headers = new robot_1_0.OrgGroupSendHeaders({
+    xAcsDingtalkAccessToken: accessToken
+  });
+
+  const msgParamObj: { text: string; title?: string } = { text };
+  if (title !== undefined) {
+    msgParamObj.title = title;
+  }
+  const msgParam = JSON.stringify(msgParamObj);
+
+  const requestData = {
+    robotCode,
+    openConversationId,
+    msgKey: 'sampleMarkdown',
+    msgParam
+  };
+  console.log('📤 请求参数:', JSON.stringify(requestData, null, 2));
+
+  const request = new robot_1_0.OrgGroupSendRequest({
+    robotCode,
+    openConversationId,
+    msgKey: 'sampleMarkdown',
+    msgParam
+  });
+
+  const response = await robotClient.orgGroupSendWithOptions(
+    request,
+    headers,
+    new $Util.RuntimeOptions({})
+  );
+
+  console.log('📥 响应数据:', JSON.stringify(response.body, null, 2));
+  console.log('✅ 发送群聊 Markdown 消息完成');
+  console.log('========================================\n');
+  return response;
+}
+
+/**
  * 启动"嘿嘿"定时任务
  * @param userId - 用户 ID
  * @param robotCode - 机器人编码
@@ -563,12 +685,27 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
     console.log(JSON.stringify(data, null, 2));
     console.log('========================================\n');
 
+    const isGroup = data.conversationType === '2';
+
+    // 群聊消息延迟 3 秒后再回复，用于测试 @提醒 是否有通知
+    if (isGroup) {
+      console.log('⏳ 群聊消息，延迟 3 秒后处理...');
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log('⏳ 延迟结束，开始处理消息');
+    }
+
     console.log('📨 消息摘要:');
     console.log('   发送者:', data.senderNick);
     console.log('   发送者ID:', data.senderStaffId);
     console.log('   发送者企业ID:', data.senderCorpId);
-    console.log('   会话类型:', data.conversationType === '1' ? '单聊' : '群聊');
+    console.log('   会话类型:', isGroup ? '群聊' : '单聊');
     console.log('   会话ID:', data.conversationId);
+    if (isGroup) {
+      console.log('   群名称:', data.conversationTitle ?? '未知');
+      console.log('   openConversationId:', data.openConversationId ?? '无');
+      console.log('   是否管理员:', data.isAdmin ?? false);
+      console.log('   @用户列表:', JSON.stringify(data.atUsers ?? []));
+    }
     console.log('   消息ID:', data.msgId);
     console.log('   消息类型:', data.msgtype);
     console.log('   机器人编码:', data.robotCode);
@@ -581,30 +718,44 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
 
     // 处理文本消息
     if (data.msgtype === 'text') {
-      const content = data.text?.content?.trim() ?? '';
-      console.log('\n📝 文本消息内容:', content);
+      let content = data.text?.content?.trim() ?? '';
+
+      // 群聊中文本可能包含 @机器人 的前缀，需要清理
+      if (isGroup) {
+        // 钉钉群聊中 @机器人 后的文本会自动去掉 @部分，但保险起见做一次清理
+        content = content.trim();
+        console.log('\n📝 群聊文本消息内容:', content);
+        console.log('   来自群:', data.conversationTitle ?? data.conversationId);
+        console.log('   发送者:', data.senderNick);
+      } else {
+        console.log('\n📝 文本消息内容:', content);
+      }
 
       const { senderStaffId, robotCode } = data;
 
-      // 检测"嘿嘿"消息，启动定时任务
+      // 检测"嘿嘿"消息，启动定时任务（仅单聊支持）
       if (content === '嘿嘿') {
+        if (isGroup) {
+          if (data.sessionWebhook) {
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '不支持',
+              text: '## ⚠️ 提示\n\n"嘿嘿" 定时任务仅在单聊中可用',
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: content
+            }));
+          }
+          return { status: 'SUCCESS' };
+        }
+
         console.log('🎯 检测到"嘿嘿"消息，启动定时任务');
         startHeiHeiTimer(senderStaffId, robotCode);
 
         // 回复用户
         if (data.sessionWebhook) {
-          const replyBody: MarkdownReplyBody = {
-            msgtype: 'markdown',
-            markdown: {
-              title: '定时任务已启动',
-              text: `## 😄 收到！\n\n我会每 **30 秒** 给你发一次 "嘿嘿"\n\n> 发送 \`停止嘿嘿\` 可以停止`
-            },
-            at: {
-              atUserIds: [senderStaffId],
-              isAtAll: false
-            }
-          };
-          await replyMessage(data.sessionWebhook, replyBody);
+          await replyMessage(data.sessionWebhook, buildMarkdownReply({
+            title: '定时任务已启动',
+            text: `## 😄 收到！\n\n我会每 **30 秒** 给你发一次 "嘿嘿"\n\n> 发送 \`停止嘿嘿\` 可以停止`,
+            isGroup, senderStaffId, senderNick: data.senderNick, originalContent: content
+          }));
         }
         return { status: 'SUCCESS' };
       }
@@ -614,30 +765,25 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
         const stopped = stopHeiHeiTimer(senderStaffId);
         
         if (data.sessionWebhook) {
-          const replyBody: MarkdownReplyBody = {
-            msgtype: 'markdown',
-            markdown: {
-              title: stopped ? '任务已停止' : '无运行任务',
-              text: stopped ? '## ✅ 已停止\n\n"嘿嘿" 定时任务已停止' : '## ⚠️ 提示\n\n你没有正在运行的 "嘿嘿" 任务'
-            },
-            at: {
-              atUserIds: [senderStaffId],
-              isAtAll: false
-            }
-          };
-          await replyMessage(data.sessionWebhook, replyBody);
+          await replyMessage(data.sessionWebhook, buildMarkdownReply({
+            title: stopped ? '任务已停止' : '无运行任务',
+            text: stopped ? '## ✅ 已停止\n\n"嘿嘿" 定时任务已停止' : '## ⚠️ 提示\n\n你没有正在运行的 "嘿嘿" 任务',
+            isGroup, senderStaffId, senderNick: data.senderNick, originalContent: content
+          }));
         }
         return { status: 'SUCCESS' };
       }
 
-      // 检测 "md" 消息，测试 sampleMarkdown 的 title 是否必填
+      // 检测 "md" 消息，测试 sampleMarkdown（单聊用 BatchSendOTO，群聊用 OrgGroupSend）
       if (content === 'md') {
         console.log('🎯 检测到 "md" 消息，测试 sampleMarkdown');
         
         const markdownText = [
           '## 🧪 sampleMarkdown 测试',
           '',
-          '这是一条通过 **BatchSendOTO API** 发送的 Markdown 消息。',
+          isGroup
+            ? '这是一条通过 **OrgGroupSend API** 发送的群聊 Markdown 消息。'
+            : '这是一条通过 **BatchSendOTO API** 发送的 Markdown 消息。',
           '',
           '### 支持的格式',
           '',
@@ -654,57 +800,118 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
         ].join('\n');
 
         try {
-          // 第一条：有 title
-          console.log('\n📤 发送第 1 条消息（有 title）...');
-          await sendMarkdownToUser(
-            senderStaffId,
-            markdownText,
-            robotCode,
-            '有 Title 的消息'  // 有 title
-          );
+          if (isGroup && data.openConversationId) {
+            // 群聊：使用 OrgGroupSend
+            console.log('\n📤 发送群聊 Markdown 消息（有 title）...');
+            await sendMarkdownToGroup(
+              data.openConversationId,
+              markdownText,
+              robotCode,
+              '有 Title 的消息'
+            );
 
-          // 第二条：没有 title
-          console.log('\n📤 发送第 2 条消息（没有 title）...');
-          await sendMarkdownToUser(
-            senderStaffId,
-            markdownText + '\n\n---\n\n⚠️ **这条消息没有传 title 参数**',
-            robotCode
-            // 不传 title
-          );
+            console.log('\n📤 发送群聊 Markdown 消息（没有 title）...');
+            await sendMarkdownToGroup(
+              data.openConversationId,
+              markdownText + '\n\n---\n\n⚠️ **这条消息没有传 title 参数**',
+              robotCode
+            );
+          } else {
+            // 单聊：使用 BatchSendOTO
+            console.log('\n📤 发送第 1 条消息（有 title）...');
+            await sendMarkdownToUser(
+              senderStaffId,
+              markdownText,
+              robotCode,
+              '有 Title 的消息'
+            );
 
-          console.log('✅ 两条 sampleMarkdown 消息发送完成');
+            console.log('\n📤 发送第 2 条消息（没有 title）...');
+            await sendMarkdownToUser(
+              senderStaffId,
+              markdownText + '\n\n---\n\n⚠️ **这条消息没有传 title 参数**',
+              robotCode
+            );
+          }
+
+          console.log('✅ sampleMarkdown 消息发送完成');
         } catch (err) {
           const error = err as Error;
           console.error('❌ 发送 sampleMarkdown 失败:', error.message);
           
-          // 通过 webhook 回复错误信息
           if (data.sessionWebhook) {
-            const errorReply: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '发送失败',
-                text: `## ❌ sampleMarkdown 发送失败\n\n**错误信息：**\n\n\`\`\`\n${error.message}\n\`\`\``
-              }
-            };
-            await replyMessage(data.sessionWebhook, errorReply);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '发送失败',
+              text: `## ❌ sampleMarkdown 发送失败\n\n**错误信息：**\n\n\`\`\`\n${error.message}\n\`\`\``,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: content
+            }));
           }
         }
         
         return { status: 'SUCCESS' };
       }
 
-      // 其他文本消息：使用 markdown 格式回复
-      const replyBody: MarkdownReplyBody = {
-        msgtype: 'markdown',
-        markdown: {
-          title: '收到消息',
-          text: `## 📨 收到消息\n\n**你说：**\n\n> ${content}`
-        },
-        at: {
-          atUserIds: [senderStaffId],  // @发送者
-          isAtAll: false
+      // 检测 "img" 消息，测试主动发送图片（群聊用 OrgGroupSend，单聊用 BatchSendOTO）
+      if (content === 'img') {
+        console.log('🎯 检测到 "img" 消息，测试主动发送图片');
+
+        // 查找 tmp 目录下最新的图片文件作为测试素材
+        const tmpFiles = fs.readdirSync(TMP_DIR).filter(f => /\.(png|jpg|jpeg|gif)$/i.test(f));
+        if (tmpFiles.length === 0) {
+          if (data.sessionWebhook) {
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '无测试图片',
+              text: '## ⚠️ 提示\n\ntmp 目录下没有图片文件。\n\n请先发一张图片给机器人，保存后再试。',
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: content
+            }));
+          }
+          return { status: 'SUCCESS' };
         }
-      };
+
+        const latestImage = tmpFiles[tmpFiles.length - 1];
+        const imagePath = path.join(TMP_DIR, latestImage);
+        console.log('📷 使用测试图片:', imagePath);
+
+        try {
+          // 上传图片到钉钉
+          const uploadResult = await uploadMedia(imagePath, 'image');
+          const photoURL = uploadResult.url;
+
+          if (isGroup && data.openConversationId) {
+            // 群聊：使用 OrgGroupSend 发送图片
+            console.log('📤 通过 OrgGroupSend 发送群聊图片...');
+            await sendImageToGroup(data.openConversationId, photoURL, robotCode);
+            console.log('✅ 群聊图片发送完成');
+          } else {
+            // 单聊：使用 BatchSendOTO 发送图片
+            console.log('📤 通过 BatchSendOTO 发送单聊图片...');
+            await sendImageToUser(senderStaffId, photoURL, robotCode);
+            console.log('✅ 单聊图片发送完成');
+          }
+        } catch (err) {
+          const error = err as Error;
+          console.error('❌ 发送图片失败:', error.message);
+          if (data.sessionWebhook) {
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '图片发送失败',
+              text: `## ❌ 图片发送失败\n\n**错误信息：**\n\n\`\`\`\n${error.message}\n\`\`\``,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: content
+            }));
+          }
+        }
+        return { status: 'SUCCESS' };
+      }
+
+      // 其他文本消息：使用 markdown 格式回复
+      const replyText = isGroup
+        ? `## 📨 收到消息\n\n> ${content}`
+        : `## 📨 收到消息\n\n**你说：**\n\n> ${content}`;
+
+      const replyBody = buildMarkdownReply({
+        title: '收到消息',
+        text: replyText,
+        isGroup, senderStaffId, senderNick: data.senderNick, originalContent: content
+      });
 
       // 使用 sessionWebhook 回复消息
       if (data.sessionWebhook) {
@@ -716,6 +923,9 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
     // 处理图片消息
     if (data.msgtype === 'picture') {
       console.log('\n🖼️ 图片消息详情:');
+      if (isGroup) {
+        console.log('   来源: 群聊 -', data.conversationTitle ?? data.conversationId);
+      }
       console.log('   图片内容:', JSON.stringify(data.content, null, 2));
 
       const downloadCode = data.content?.downloadCode;
@@ -752,66 +962,24 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           // 5. 使用 markdown 发送图文混排消息（展示各种 markdown 语法）
           console.log('\n📤 准备发送图文混排消息给用户...');
           
-          const replyBody: MarkdownReplyBody = {
-            msgtype: 'markdown',
-            markdown: {
-              title: '图片已收到',
-              text: [
-                '# 一级标题：图片已收到',
-                '## 二级标题：处理结果',
-                '### 三级标题：详细信息',
-                '',
-                '---',
-                '',
-                '> 这是一段引用文字，用于展示引用效果',
+          const imageMarkdownText = [
+                '## 图片已收到',
                 '',
                 `![收到的图片](${photoURL})`,
-                '',
-                '**这是加粗文字** 和 *这是斜体文字*',
-                '',
-                '#### 表格展示',
                 '',
                 '| 属性 | 值 |',
                 '|---|---|',
                 `| 📁 文件名 | \`${filename}\` |`,
                 `| 📊 大小 | ${(imageBuffer.length / 1024).toFixed(2)} KB |`,
                 '| 📅 时间 | ' + new Date().toLocaleString() + ' |',
-                '',
-                '#### 无序列表',
-                '',
-                '- 列表项 1：支持图片',
-                '- 列表项 2：支持表格',
-                '- 列表项 3：支持各种格式',
-                '',
-                '#### 有序列表',
-                '',
-                '1. 第一步：接收图片',
-                '2. 第二步：保存到本地',
-                '3. 第三步：上传到钉钉',
-                '4. 第四步：返回结果',
-                '',
-                '---',
-                '',
-                '这是一个 [链接示例](https://open.dingtalk.com)，点击可以跳转',
-                '',
-                '行内代码：`console.log("Hello DingTalk!")`',
-                '',
-                '代码块：',
-                '```',
-                'function hello() {',
-                '  return "Hello, World!";',
-                '}',
-                '```'
-              ].join('\n')
-            },
-            at: {
-              atUserIds: [senderStaffId],
-              isAtAll: false
-            }
-          };
+              ].join('\n');
 
           if (data.sessionWebhook) {
-            await replyMessage(data.sessionWebhook, replyBody);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '图片已收到',
+              text: imageMarkdownText,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: '[图片]'
+            }));
           }
 
         } catch (downloadError) {
@@ -819,16 +987,12 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           console.error('\n❌ 处理图片失败:', err.message);
           console.error('   错误堆栈:', err.stack);
 
-          // 通知用户处理失败
           if (data.sessionWebhook) {
-            const errorReply: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '图片处理失败',
-                text: `## ❌ 图片处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
-              }
-            };
-            await replyMessage(data.sessionWebhook, errorReply);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '图片处理失败',
+              text: `## ❌ 图片处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: '[图片]'
+            }));
           }
         }
       } else {
@@ -836,13 +1000,17 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
       }
     }
 
-    // 处理富文本消息（文字+图片混合）
+    // 处理富文本消息（文字+图片混合，群聊中 @机器人+图片 就是这个类型）
     if (data.msgtype === 'richText') {
       console.log('\n📝🖼️ 富文本消息详情:');
+      if (isGroup) {
+        console.log('   来源: 群聊 -', data.conversationTitle ?? data.conversationId);
+        console.log('   发送者:', data.senderNick);
+      }
       const richTextContent = data.content as RichTextContent;
       console.log('   内容:', JSON.stringify(richTextContent, null, 2));
 
-      const { robotCode, senderStaffId, conversationType, conversationId } = data;
+      const { robotCode, senderStaffId } = data;
 
       if (richTextContent?.richText && robotCode) {
         try {
@@ -876,8 +1044,8 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           console.log('   - 文本部分:', textParts.join(' | ').replace(/\n/g, '\\n'));
           console.log('   - 图片数量:', imageInfos.length);
 
-          // 处理每张图片
-          const savedImages: string[] = [];
+          // 处理每张图片：下载、保存、上传
+          const savedImages: { filename: string; photoURL?: string; size: number }[] = [];
           for (let i = 0; i < imageInfos.length; i++) {
             const imgInfo = imageInfos[i];
             console.log(`\n🔄 处理第 ${i + 1}/${imageInfos.length} 张图片...`);
@@ -889,47 +1057,60 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
             const ext = imgInfo.extension ?? 'png';
             const filename = `richtext_image_${timestamp}_${i + 1}.${ext}`;
             const savedPath = saveImageToTmp(imageBuffer, filename);
-            savedImages.push(filename);
             console.log(`💾 图片 ${i + 1} 已保存: ${savedPath}`);
+
+            // 上传到钉钉获取 photoURL（用于回复中展示）
+            let photoURL: string | undefined;
+            try {
+              const uploadResult = await uploadMedia(savedPath, 'image');
+              photoURL = uploadResult.url;
+              console.log(`✅ 图片 ${i + 1} 上传成功`);
+            } catch (uploadErr) {
+              console.error(`⚠️ 图片 ${i + 1} 上传失败:`, (uploadErr as Error).message);
+            }
+
+            savedImages.push({ filename, photoURL, size: imageBuffer.length });
           }
 
-          // 回复用户
-          const replyText = [
+          // 回复用户（包含上传后的图片展示）
+          const replyLines = [
             '## ✅ 收到富文本消息！',
             '',
-            '### 📝 文本内容',
-            '',
+            '### 📝 文本内容', '',
             textParts.length > 0 ? `> ${textParts.join('\n> ')}` : '（无文本）',
-            '',
-            `### 🖼️ 包含 ${imageInfos.length} 张图片`,
-            '',
-            ...savedImages.map((name, i) => `${i + 1}. \`${name}\``)
-          ].join('\n');
+            '', `### 🖼️ 包含 ${imageInfos.length} 张图片`, '',
+          ];
+
+          for (let i = 0; i < savedImages.length; i++) {
+            const img = savedImages[i];
+            replyLines.push(`**图片 ${i + 1}：** \`${img.filename}\` (${(img.size / 1024).toFixed(2)} KB)`);
+            if (img.photoURL) {
+              replyLines.push('', `![图片${i + 1}](${img.photoURL})`, '');
+            }
+          }
+
+          // 构建原始消息摘要（用于群聊引用）
+          const richTextSummary = textParts.length > 0
+            ? textParts.join(' ') + (imageInfos.length > 0 ? ` [+${imageInfos.length}张图片]` : '')
+            : `[${imageInfos.length}张图片]`;
 
           if (data.sessionWebhook) {
-            const replyBody: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '收到富文本消息',
-                text: replyText
-              },
-              at: { atUserIds: [senderStaffId], isAtAll: false }
-            };
-            await replyMessage(data.sessionWebhook, replyBody);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '收到富文本消息',
+              text: replyLines.join('\n'),
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: richTextSummary
+            }));
           }
 
         } catch (error) {
           const err = error as Error;
           console.error('\n❌ 处理富文本消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '富文本处理失败',
-                text: `## ❌ 富文本消息处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
-              }
-            };
-            await replyMessage(data.sessionWebhook, errorReply);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '富文本处理失败',
+              text: `## ❌ 富文本消息处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: '[富文本消息]'
+            }));
           }
         }
       }
@@ -984,29 +1165,22 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           }
 
           if (data.sessionWebhook) {
-            const replyBody: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '收到语音消息',
-                text: replyLines.join('\n')
-              },
-              at: { atUserIds: [senderStaffId], isAtAll: false }
-            };
-            await replyMessage(data.sessionWebhook, replyBody);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '收到语音消息',
+              text: replyLines.join('\n'),
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: '[语音消息]'
+            }));
           }
 
         } catch (error) {
           const err = error as Error;
           console.error('\n❌ 处理音频消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '音频处理失败',
-                text: `## ❌ 音频处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
-              }
-            };
-            await replyMessage(data.sessionWebhook, errorReply);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '音频处理失败',
+              text: `## ❌ 音频处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: '[语音消息]'
+            }));
           }
         }
       } else {
@@ -1063,29 +1237,22 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           ];
 
           if (data.sessionWebhook) {
-            const replyBody: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '收到视频消息',
-                text: replyLines.join('\n')
-              },
-              at: { atUserIds: [senderStaffId], isAtAll: false }
-            };
-            await replyMessage(data.sessionWebhook, replyBody);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '收到视频消息',
+              text: replyLines.join('\n'),
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: '[视频消息]'
+            }));
           }
 
         } catch (error) {
           const err = error as Error;
           console.error('\n❌ 处理视频消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '视频处理失败',
-                text: `## ❌ 视频处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
-              }
-            };
-            await replyMessage(data.sessionWebhook, errorReply);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '视频处理失败',
+              text: `## ❌ 视频处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: '[视频消息]'
+            }));
           }
         }
       } else {
@@ -1138,29 +1305,22 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
           ];
 
           if (data.sessionWebhook) {
-            const replyBody: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '收到文件',
-                text: replyLines.join('\n')
-              },
-              at: { atUserIds: [senderStaffId], isAtAll: false }
-            };
-            await replyMessage(data.sessionWebhook, replyBody);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '收到文件',
+              text: replyLines.join('\n'),
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: `[文件] ${fileName}`
+            }));
           }
 
         } catch (error) {
           const err = error as Error;
           console.error('\n❌ 处理文件消息失败:', err.message);
           if (data.sessionWebhook) {
-            const errorReply: MarkdownReplyBody = {
-              msgtype: 'markdown',
-              markdown: {
-                title: '文件处理失败',
-                text: `## ❌ 文件处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``
-              }
-            };
-            await replyMessage(data.sessionWebhook, errorReply);
+            await replyMessage(data.sessionWebhook, buildMarkdownReply({
+              title: '文件处理失败',
+              text: `## ❌ 文件处理失败\n\n**错误信息：**\n\n\`\`\`\n${err.message}\n\`\`\``,
+              isGroup, senderStaffId, senderNick: data.senderNick, originalContent: `[文件] ${fileName}`
+            }));
           }
         }
       } else {

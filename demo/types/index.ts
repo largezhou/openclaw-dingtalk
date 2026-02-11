@@ -101,6 +101,10 @@ export interface RobotMessageData {
   isInAtList: boolean;
   sessionWebhook?: string;
   sessionWebhookExpiredTime?: string;
+  // 群聊特有字段
+  conversationTitle?: string;       // 群名称（仅群聊）
+  openConversationId?: string;      // 群会话 ID（仅群聊，用于主动发消息）
+  isAdmin?: boolean;                // 发送者是否群管理员（仅群聊）
   // 文本消息
   text?: TextContent;
   // 图片消息（content 字段）
