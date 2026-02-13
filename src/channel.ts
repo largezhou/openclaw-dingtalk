@@ -17,8 +17,8 @@ import {
   resolveDefaultDingTalkAccountId,
   resolveDingTalkAccount,
 } from "./accounts.js";
-import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount } from "./types.js";
-import { sendTextMessage, sendImageMessage, sendFileMessage, uploadMedia, probeDingTalkBot, inferMediaType } from "./client.js";
+import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount, type DingTalkGroupConfig } from "./types.js";
+import { sendTextMessage, sendImageMessage, sendFileMessage, uploadMedia, probeDingTalkBot, inferMediaType, isGroupTarget } from "./client.js";
 import { logger } from "./logger.js";
 import { monitorDingTalkProvider } from "./monitor.js";
 import { dingtalkOnboardingAdapter } from "./onboarding.js";
@@ -30,8 +30,11 @@ import { PLUGIN_ID } from "./constants.js";
  * 标准化钉钉发送目标
  * 支持格式：
  * - 原始用户 ID
- * - ddingtalk:user:<userId>
+ * - ddingtalk:user:<userId>  → <userId>
+ * - ddingtalk:chat:<groupId> → chat:<groupId>（保留 chat: 前缀用于群聊路由）
  * - ddingtalk:<id>
+ * - chat:<groupId>（直接群聊格式）
+ * - user:<userId>
  */
 function normalizeDingTalkTarget(target: string): string | undefined {
   const trimmed = target.trim();
@@ -39,17 +42,32 @@ function normalizeDingTalkTarget(target: string): string | undefined {
     return undefined;
   }
 
-  // 去除 ddingtalk: 前缀（使用动态正则）
+  // 处理 ddingtalk:chat:<groupId> → chat:<groupId>
+  const chatPrefixPattern = new RegExp(`^${PLUGIN_ID}:chat:`, "i");
+  if (chatPrefixPattern.test(trimmed)) {
+    const groupId = trimmed.replace(chatPrefixPattern, "");
+    return groupId ? `chat:${groupId}` : undefined;
+  }
+
+  // 处理 chat:<groupId>（直接保留）
+  if (trimmed.startsWith("chat:")) {
+    return trimmed.slice(5) ? trimmed : undefined;
+  }
+
+  // 去除 ddingtalk:user: 或 ddingtalk: 前缀
   const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i");
   const withoutPrefix = trimmed.replace(prefixPattern, "");
 
-  if (!withoutPrefix) {
+  // 去除 user: 前缀
+  const userId = withoutPrefix.replace(/^user:/, "");
+
+  if (!userId) {
     return undefined;
   }
 
   // 验证格式：钉钉 ID 一般是字母数字组合
-  if (/^[a-zA-Z0-9_$+-]+$/i.test(withoutPrefix)) {
-    return withoutPrefix;
+  if (/^[a-zA-Z0-9_$+-]+$/i.test(userId)) {
+    return userId;
   }
 
   return undefined;
@@ -73,7 +91,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
   meta,
   onboarding: dingtalkOnboardingAdapter,
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     reactions: false,
     threads: false,
     media: true,
@@ -82,6 +100,18 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
   },
   commands: {
     enforceOwnerForCommands: true,
+  },
+  groups: {
+    resolveToolPolicy: ({ cfg, groupId }) => {
+      if (!groupId) return undefined;
+      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
+      const groups = dingtalkConfig.groups;
+      if (!groups) return undefined;
+      const key = Object.keys(groups).find(
+        (k) => k === groupId || k.toLowerCase() === groupId.toLowerCase()
+      );
+      return key ? groups[key]?.tools : undefined;
+    },
   },
   reload: { configPrefixes: [`channels.${PLUGIN_ID}`] },
   configSchema: buildChannelConfigSchema(DingTalkConfigSchema),
@@ -148,8 +178,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       if (!trimmed) {
         return undefined;
       }
-      const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i");
-      return trimmed.replace(prefixPattern, "");
+      return normalizeDingTalkTarget(trimmed);
     },
     targetResolver: {
       looksLikeId: (id) => {
@@ -157,11 +186,14 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         if (!trimmed) {
           return false;
         }
-        // 钉钉用户 ID 的格式
+        // 钉钉用户 ID 或群聊 ID
         const prefixPattern = new RegExp(`^${PLUGIN_ID}:`, "i");
-        return /^[a-zA-Z0-9_-]+$/i.test(trimmed) || prefixPattern.test(trimmed);
+        return /^[a-zA-Z0-9_-]+$/i.test(trimmed)
+          || prefixPattern.test(trimmed)
+          || trimmed.startsWith("chat:")
+          || trimmed.startsWith("user:");
       },
-      hint: "<userId>",
+      hint: "<userId> or chat:<openConversationId>",
     },
   },
 
@@ -225,9 +257,19 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
      * 支持以下格式：
      * - 用户 ID：直接是用户的 staffId
      * - 带前缀格式：ddingtalk:user:<userId>
+     * - 群聊格式：chat:<openConversationId> 或 ddingtalk:chat:<openConversationId>
      */
     resolveTarget: ({ to, allowFrom, mode }) => {
       const trimmed = to?.trim() ?? "";
+
+      // 如果目标是群聊格式，直接使用（群聊回复时 To 已经是 chat:xxx 格式）
+      if (trimmed.startsWith("chat:") || trimmed.startsWith(`${PLUGIN_ID}:chat:`)) {
+        const normalized = normalizeDingTalkTarget(trimmed);
+        if (normalized) {
+          return { ok: true, to: normalized };
+        }
+      }
+
       const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
       const hasWildcard = allowListRaw.includes("*");
       const allowList = allowListRaw
@@ -240,7 +282,6 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         const normalizedTo = normalizeDingTalkTarget(trimmed);
 
         if (!normalizedTo) {
-          // 目标格式无效，尝试使用 allowList 的第一个
           if ((mode === "implicit" || mode === "heartbeat") && allowList.length > 0) {
             return { ok: true, to: allowList[0] };
           }
@@ -248,17 +289,15 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
             ok: false,
             error: missingTargetError(
               "DingTalk",
-              `<userId> 或 channels.${PLUGIN_ID}.allowFrom[0]`,
+              `<userId>, chat:<groupId> 或 channels.${PLUGIN_ID}.allowFrom[0]`,
             ),
           };
         }
 
-        // 显式模式或通配符模式，直接返回
         if (mode === "explicit") {
           return { ok: true, to: normalizedTo };
         }
 
-        // 隐式/心跳模式：检查 allowList
         if (mode === "implicit" || mode === "heartbeat") {
           if (hasWildcard || allowList.length === 0) {
             return { ok: true, to: normalizedTo };
@@ -266,14 +305,13 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
           if (allowList.includes(normalizedTo)) {
             return { ok: true, to: normalizedTo };
           }
-          // 不在 allowList 中，使用第一个
           return { ok: true, to: allowList[0] };
         }
 
         return { ok: true, to: normalizedTo };
       }
 
-      // 没有指定目标，尝试使用 allowList 的第一个
+      // 没有指定目标
       if (allowList.length > 0) {
         return { ok: true, to: allowList[0] };
       }
@@ -282,7 +320,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         ok: false,
         error: missingTargetError(
           "DingTalk",
-          `<userId> 或 channels.${PLUGIN_ID}.allowFrom[0]`,
+          `<userId>, chat:<groupId> 或 channels.${PLUGIN_ID}.allowFrom[0]`,
         ),
       };
     },

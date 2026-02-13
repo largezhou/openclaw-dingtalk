@@ -127,7 +127,7 @@ export async function replyViaWebhook(
   return result;
 }
 
-// ======================= 主动发送消息（BatchSendOTO） =======================
+// ======================= 主动发送消息（BatchSendOTO / OrgGroupSend） =======================
 
 /**
  * 钉钉机器人消息类型（msgKey）
@@ -187,76 +187,143 @@ async function sendOTOMessage(
 }
 
 /**
- * 发送文本消息（markdown 格式）
+ * 底层通用方法：主动发送群聊消息（OrgGroupSend）
+ */
+async function sendGroupMessage(
+  openConversationId: string,
+  msgKey: DingTalkMsgKey,
+  msgParam: Record<string, unknown>,
+  options: SendMessageOptions
+): Promise<SendMessageResult> {
+  const accessToken = await getAccessToken(options.account);
+  const robotClient = createRobotClient();
+
+  const headers = new robot_1_0.OrgGroupSendHeaders({
+    xAcsDingtalkAccessToken: accessToken,
+  });
+
+  const request = new robot_1_0.OrgGroupSendRequest({
+    robotCode: options.account.clientId,
+    openConversationId,
+    msgKey,
+    msgParam: JSON.stringify(msgParam),
+  });
+
+  const response = await robotClient.orgGroupSendWithOptions(
+    request,
+    headers,
+    new $Util.RuntimeOptions({})
+  );
+
+  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-group-${Date.now()}`;
+
+  return {
+    messageId: processQueryKey,
+    chatId: openConversationId,
+  };
+}
+
+// ======================= 统一目标路由 =======================
+
+/**
+ * 判断目标是否为群聊
+ * 群聊目标格式：chat:<openConversationId>
+ * 单聊目标格式：user:<userId> 或直接 <userId>
+ */
+export function isGroupTarget(to: string): boolean {
+  return to.startsWith("chat:");
+}
+
+/** 从 to 中提取实际 ID（去除 chat: / user: 前缀） */
+export function extractTargetId(to: string): string {
+  if (to.startsWith("chat:")) return to.slice(5);
+  if (to.startsWith("user:")) return to.slice(5);
+  return to;
+}
+
+/**
+ * 统一发送消息（自动根据 to 格式路由到单聊或群聊）
+ */
+async function sendMessage(
+  to: string,
+  msgKey: DingTalkMsgKey,
+  msgParam: Record<string, unknown>,
+  options: SendMessageOptions
+): Promise<SendMessageResult> {
+  const targetId = extractTargetId(to);
+  if (isGroupTarget(to)) {
+    return sendGroupMessage(targetId, msgKey, msgParam, options);
+  }
+  return sendOTOMessage(targetId, msgKey, msgParam, options);
+}
+
+/**
+ * 发送文本消息（markdown 格式，自动路由群聊/单聊）
  */
 export async function sendTextMessage(
-  userId: string,
+  to: string,
   content: string,
   options: SendMessageOptions
 ): Promise<SendMessageResult> {
   const contentPreview = content.slice(0, 50).replace(/\n/g, " ");
-  logger.log(`[主动发送] 文本消息 | to: ${userId} | ${contentPreview}${content.length > 50 ? "..." : ""}`);
+  const isGroup = isGroupTarget(to);
+  logger.log(`[主动发送] 文本消息 | ${isGroup ? "群聊" : "单聊"} | to: ${to} | ${contentPreview}${content.length > 50 ? "..." : ""}`);
 
   const title = content.slice(0, 10).replace(/\n/g, " ");
-  const result = await sendOTOMessage(userId, "sampleMarkdown", { title, text: content }, options);
+  const result = await sendMessage(to, "sampleMarkdown", { title, text: content }, options);
 
   logger.log(`[主动发送] 文本消息发送成功 | messageId: ${result.messageId}`);
   return result;
 }
 
 /**
- * 发送图片消息
+ * 发送图片消息（自动路由群聊/单聊）
  * @param photoURL - 图片的公网可访问 URL
  */
 export async function sendImageMessage(
-  userId: string,
+  to: string,
   photoURL: string,
   options: SendMessageOptions
 ): Promise<SendMessageResult> {
-  logger.log(`[主动发送] 图片消息 | to: ${userId} | photoURL: ${photoURL.slice(0, 80)}...`);
+  const isGroup = isGroupTarget(to);
+  logger.log(`[主动发送] 图片消息 | ${isGroup ? "群聊" : "单聊"} | to: ${to} | photoURL: ${photoURL.slice(0, 80)}...`);
 
-  const result = await sendOTOMessage(userId, "sampleImageMsg", { photoURL }, options);
+  const result = await sendMessage(to, "sampleImageMsg", { photoURL }, options);
 
   logger.log(`[主动发送] 图片消息发送成功 | messageId: ${result.messageId}`);
   return result;
 }
 
 /**
- * 发送语音消息
+ * 发送语音消息（自动路由群聊/单聊）
  * @param mediaId - 语音文件的 mediaId（通过 uploadMedia 获取）
  * @param duration - 语音时长（秒），可选
  */
 export async function sendAudioMessage(
-  userId: string,
+  to: string,
   mediaId: string,
   options: SendMessageOptions & {
     duration?: string;
   }
 ): Promise<SendMessageResult> {
-  logger.log(`[主动发送] 语音消息 | to: ${userId} | mediaId: ${mediaId} | duration: ${options.duration ?? "未知"}`);
+  logger.log(`[主动发送] 语音消息 | to: ${to} | mediaId: ${mediaId} | duration: ${options.duration ?? "未知"}`);
 
-  // 构建 msgParam，只包含有值的字段
   const msgParam: Record<string, string> = { mediaId };
   if (options.duration) {
     msgParam.duration = options.duration;
   }
 
-  const result = await sendOTOMessage(userId, "sampleAudio", msgParam, options);
+  const result = await sendMessage(to, "sampleAudio", msgParam, options);
 
   logger.log(`[主动发送] 语音消息发送成功 | messageId: ${result.messageId}`);
   return result;
 }
 
 /**
- * 发送视频消息
- * @param videoMediaId - 视频文件的 mediaId（通过 uploadMedia 获取）
- * @param options.duration - 视频时长（毫秒），可选
- * @param options.picMediaId - 视频封面图的 mediaId，可选
- * @param options.width - 视频宽度（像素），可选
- * @param options.height - 视频高度（像素），可选
+ * 发送视频消息（自动路由群聊/单聊）
  */
 export async function sendVideoMessage(
-  userId: string,
+  to: string,
   videoMediaId: string,
   options: SendMessageOptions & {
     duration?: string;
@@ -265,9 +332,8 @@ export async function sendVideoMessage(
     height?: string;
   }
 ): Promise<SendMessageResult> {
-  logger.log(`[主动发送] 视频消息 | to: ${userId} | videoMediaId: ${videoMediaId}`);
+  logger.log(`[主动发送] 视频消息 | to: ${to} | videoMediaId: ${videoMediaId}`);
 
-  // 构建 msgParam，只包含有值的字段
   const msgParam: Record<string, string> = {
     videoMediaId,
     videoType: "mp4",
@@ -285,42 +351,38 @@ export async function sendVideoMessage(
     msgParam.height = options.height;
   }
 
-  const result = await sendOTOMessage(userId, "sampleVideo", msgParam, options);
+  const result = await sendMessage(to, "sampleVideo", msgParam, options);
 
   logger.log(`[主动发送] 视频消息发送成功 | messageId: ${result.messageId}`);
   return result;
 }
 
 /**
- * 发送文件消息
+ * 发送文件消息（自动路由群聊/单聊）
  * @param mediaId - 文件的 mediaId（通过 uploadMedia 获取）
  * @param fileName - 文件名
  * @param fileType - 文件扩展名（如 pdf、doc 等）
  */
 export async function sendFileMessage(
-  userId: string,
+  to: string,
   mediaId: string,
   fileName: string,
   fileType: string,
   options: SendMessageOptions
 ): Promise<SendMessageResult> {
-  logger.log(`[主动发送] 文件消息 | to: ${userId} | fileName: ${fileName} | fileType: ${fileType}`);
+  logger.log(`[主动发送] 文件消息 | to: ${to} | fileName: ${fileName} | fileType: ${fileType}`);
 
-  const result = await sendOTOMessage(userId, "sampleFile", { mediaId, fileName, fileType }, options);
+  const result = await sendMessage(to, "sampleFile", { mediaId, fileName, fileType }, options);
 
   logger.log(`[主动发送] 文件消息发送成功 | messageId: ${result.messageId}`);
   return result;
 }
 
 /**
- * 发送链接消息
- * @param title - 链接标题
- * @param text - 链接描述
- * @param messageUrl - 点击后跳转的 URL
- * @param picUrl - 图片 URL（可选）
+ * 发送链接消息（自动路由群聊/单聊）
  */
 export async function sendLinkMessage(
-  userId: string,
+  to: string,
   options: SendMessageOptions & {
     title: string;
     text: string;
@@ -328,10 +390,10 @@ export async function sendLinkMessage(
     picUrl?: string;
   }
 ): Promise<SendMessageResult> {
-  logger.log(`[主动发送] 链接消息 | to: ${userId} | title: ${options.title}`);
+  logger.log(`[主动发送] 链接消息 | to: ${to} | title: ${options.title}`);
 
-  const result = await sendOTOMessage(
-    userId,
+  const result = await sendMessage(
+    to,
     "sampleLink",
     {
       title: options.title,

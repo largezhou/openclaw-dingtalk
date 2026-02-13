@@ -2,6 +2,26 @@ import { z } from "zod";
 
 // ======================= DingTalk Config Schema =======================
 
+/** 群聊策略 */
+export type DingTalkGroupPolicy = "open" | "allowlist" | "disabled";
+
+/** 单个群组的独立配置 Schema */
+export const DingTalkGroupConfigSchema = z.object({
+  /** 工具策略 */
+  tools: z.object({
+    allow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).optional(),
+  }).optional(),
+  /** 是否启用该群 */
+  enabled: z.boolean().optional(),
+  /** 群内发送者白名单 */
+  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  /** 群级系统提示词 */
+  systemPrompt: z.string().optional(),
+}).strict();
+
+export type DingTalkGroupConfig = z.infer<typeof DingTalkGroupConfigSchema>;
+
 /**
  * 钉钉渠道配置 Schema（单账户）
  */
@@ -14,8 +34,14 @@ export const DingTalkConfigSchema = z.object({
   clientId: z.string().optional(),
   /** 钉钉应用 AppSecret */
   clientSecret: z.string().optional(),
-  /** 允许的发送者白名单，默认 ["*"] 允许所有人 */
+  /** 允许的发送者白名单（单聊），默认 ["*"] 允许所有人 */
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  /** 群聊策略：open=允许所有群, allowlist=白名单, disabled=禁止群聊 */
+  groupPolicy: z.enum(["open", "allowlist", "disabled"]).optional(),
+  /** 群聊白名单（openConversationId 列表），groupPolicy=allowlist 时生效 */
+  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  /** 按群 ID 的独立配置 */
+  groups: z.record(z.string(), DingTalkGroupConfigSchema).optional(),
 });
 
 export type DingTalkConfig = z.infer<typeof DingTalkConfigSchema>;
@@ -38,8 +64,14 @@ export interface ResolvedDingTalkAccount {
   clientSecret: string;
   /** Token 来源 */
   tokenSource: "config" | "none";
-  /** 允许的发送者白名单，默认 ["*"] 允许所有人 */
+  /** 允许的发送者白名单（单聊），默认 ["*"] 允许所有人 */
   allowFrom: Array<string | number>;
+  /** 群聊策略 */
+  groupPolicy: DingTalkGroupPolicy;
+  /** 群聊白名单 */
+  groupAllowFrom: Array<string | number>;
+  /** 按群 ID 的独立配置 */
+  groups: Record<string, DingTalkGroupConfig>;
 }
 
 // ======================= Message Types =======================
@@ -169,6 +201,13 @@ export interface DingTalkMessageData {
     dingtalkId: string;
     staffId?: string;
   }>;
+  // ---- 群聊特有字段 ----
+  /** 群名称（群聊时存在） */
+  conversationTitle?: string;
+  /** 群会话 ID（群聊时存在，用于主动发消息） */
+  openConversationId?: string;
+  /** 发送者是否群管理员 */
+  isAdmin?: boolean;
 }
 
 /**

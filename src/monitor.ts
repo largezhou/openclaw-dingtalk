@@ -1,7 +1,7 @@
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
-import type { DingTalkMessageData, ResolvedDingTalkAccount, AudioContent, VideoContent, FileContent, PictureContent, RichTextContent, RichTextElement, RichTextPictureElement } from "./types.js";
-import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl } from "./client.js";
+import type { DingTalkMessageData, ResolvedDingTalkAccount, DingTalkGroupConfig, AudioContent, VideoContent, FileContent, PictureContent, RichTextContent, RichTextElement, RichTextPictureElement } from "./types.js";
+import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl, sendTextMessage } from "./client.js";
 import { resolveDingTalkAccount } from "./accounts.js";
 import { getDingTalkRuntime } from "./runtime.js";
 import { logger } from "./logger.js";
@@ -703,6 +703,41 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
   });
 
   // ============================================================================
+  // 群聊策略与 Mention 门控
+  // ============================================================================
+
+  /** 解析群组配置（按 openConversationId 查找） */
+  const resolveGroupConfig = (groupId: string): DingTalkGroupConfig | undefined => {
+    const groups = account.groups;
+    if (!groups) return undefined;
+    // 精确匹配或不区分大小写匹配
+    const key = Object.keys(groups).find(
+      (k) => k === groupId || k.toLowerCase() === groupId.toLowerCase()
+    );
+    return key ? groups[key] : undefined;
+  };
+
+  /** 检查群聊是否被允许 */
+  const isGroupAllowed = (groupId: string): boolean => {
+    const policy = account.groupPolicy;
+    if (policy === "disabled") return false;
+    if (policy === "open") return true;
+    // allowlist
+    const allowList = account.groupAllowFrom.map((e) => String(e).trim()).filter(Boolean);
+    if (allowList.length === 0 || allowList.includes("*")) return true;
+    return allowList.some((entry) => entry === groupId || entry.toLowerCase() === groupId.toLowerCase());
+  };
+
+  /** 检查机器人是否被 @ */
+  const checkBotMentioned = (data: DingTalkMessageData): boolean => {
+    // 钉钉 isInAtList 字段标识当前机器人是否在 @列表中
+    if (data.isInAtList) return true;
+    // 备用检查：atUsers 中是否包含 chatbotUserId
+    if (data.atUsers?.some((u) => u.dingtalkId === data.chatbotUserId)) return true;
+    return false;
+  };
+
+  // ============================================================================
   // 消息处理核心逻辑
   // ============================================================================
 
@@ -710,15 +745,28 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
   const buildSenderInfo = (data: DingTalkMessageData) => {
     const senderId = data.senderStaffId;
     const senderName = data.senderNick;
-    const chatId = senderId; // 单聊用 senderId 作为 chatId
+    const isGroup = data.conversationType === "2";
+    const groupId = data.openConversationId ?? data.conversationId;
+
+    // 参照飞书：From 始终标识发送者身份，避免不同用户被视为同一人
+    // To 区分群聊和单聊目标
+    const chatId = isGroup ? groupId : senderId;
+    const fromAddress = `${PLUGIN_ID}:${senderId}`;
+    const toAddress = isGroup ? `${PLUGIN_ID}:chat:${groupId}` : `${PLUGIN_ID}:user:${senderId}`;
+    const label = isGroup
+      ? (data.conversationTitle ?? groupId)
+      : (senderName || senderId);
 
     return {
       senderId,
       senderName,
       chatId,
-      fromAddress: `${PLUGIN_ID}:${senderId}`,
-      toAddress: `${PLUGIN_ID}:${senderId}`,
-      label: senderName || senderId,
+      fromAddress,
+      toAddress,
+      label,
+      isGroup,
+      groupId: isGroup ? groupId : undefined,
+      conversationTitle: data.conversationTitle,
     };
   };
 
@@ -740,22 +788,28 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     rawBody: string,
     media?: InboundMediaContext
   ) => {
-    // 解析路由
+    const isGroup = sender.isGroup;
+    const chatType = isGroup ? "group" : "direct";
+
+    // 解析路由：群聊以群 ID 为 peer，单聊以用户 ID 为 peer
     const route = pluginRuntime.channel.routing.resolveAgentRoute({
       cfg: config,
       channel: PLUGIN_ID,
       accountId,
-      peer: { kind: "dm", id: sender.chatId },
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: sender.chatId,
+      },
     });
 
     // 格式化入站消息体
     const envelopeOptions = pluginRuntime.channel.reply.resolveEnvelopeFormatOptions(config);
     const body = pluginRuntime.channel.reply.formatInboundEnvelope({
       channel: "DingTalk",
-      from: sender.label,
+      from: isGroup ? `${sender.senderName} in ${sender.conversationTitle ?? sender.groupId}` : sender.label,
       timestamp: parseInt(data.createAt),
       body: rawBody,
-      chatType: "direct",
+      chatType,
       sender: {
         id: sender.senderId,
         name: sender.senderName,
@@ -764,7 +818,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     });
 
     // 构建基础上下文
-    const baseContext = {
+    const baseContext: Record<string, unknown> = {
       Body: body,
       RawBody: rawBody,
       CommandBody: rawBody,
@@ -772,7 +826,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       To: sender.toAddress,
       SessionKey: route.sessionKey,
       AccountId: accountId,
-      ChatType: "direct" as const,
+      ChatType: chatType,
       ConversationLabel: sender.label,
       SenderId: sender.senderId,
       SenderName: sender.senderName,
@@ -780,11 +834,16 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       Surface: PLUGIN_ID,
       MessageSid: data.msgId,
       Timestamp: parseInt(data.createAt),
-      WasMentioned: data.isInAtList,
+      WasMentioned: checkBotMentioned(data),
       OriginatingChannel: PLUGIN_ID,
       OriginatingTo: sender.toAddress,
       CommandAuthorized: isSenderAllowed(sender.senderId),
     };
+
+    // 群聊特有字段
+    if (isGroup) {
+      baseContext.GroupSubject = sender.conversationTitle ?? sender.groupId;
+    }
 
     // 合并媒体字段
     const mediaFields = buildMediaContextFields(media);
@@ -801,14 +860,27 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       const replyText = payload.text ?? "";
       if (!replyText) return;
 
+      const isGroup = data.conversationType === "2";
+      const groupId = data.openConversationId ?? data.conversationId;
+
+      // 优先使用 sessionWebhook 回复（群聊/单聊通用）
       if (data.sessionWebhook) {
         const result = await replyViaWebhook(data.sessionWebhook, replyText);
-        if (result.errcode !== 0) {
-          throw new Error(`回复失败: ${result.errmsg}`);
+        if (result.errcode === 0) {
+          recordChannelRuntimeState({
+            channel: PLUGIN_ID,
+            accountId,
+            state: { lastOutboundAt: Date.now() },
+          });
+          return;
         }
-      } else {
-        logger.warn("sessionWebhook 不存在，无法回复消息");
+        // webhook 失败（可能已过期），尝试主动发送 API 降级
+        logger.warn(`Webhook 回复失败 (errcode: ${result.errcode}), 尝试主动发送 API 降级`);
       }
+
+      // 降级：通过主动发送 API
+      const to = isGroup ? `chat:${groupId}` : data.senderStaffId;
+      await sendTextMessage(to, replyText, { account });
 
       recordChannelRuntimeState({
         channel: PLUGIN_ID,
@@ -863,20 +935,35 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
   const handleMessage = async (message: DWClientDownStream) => {
     try {
       const data = JSON.parse(message.data) as DingTalkMessageData;
+      const isGroup = data.conversationType === "2";
+      const groupId = data.openConversationId ?? data.conversationId;
 
-      // 只处理单聊消息
-      if (data.conversationType === "2") {
-        logger.log(`收到群聊消息，暂不支持群聊，忽略`);
-        client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
-        return;
+      // 群聊策略检查
+      if (isGroup) {
+        if (!isGroupAllowed(groupId)) {
+          logger.log(`群聊消息被策略拒绝 | groupPolicy: ${account.groupPolicy} | groupId: ${groupId}`);
+          client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
+          return;
+        }
+
+        // 群组级别 enabled 检查
+        const groupConfig = resolveGroupConfig(groupId);
+        if (groupConfig?.enabled === false) {
+          logger.log(`群聊消息被群组配置禁用 | groupId: ${groupId}`);
+          client.socketCallBackResponse(message.headers.messageId, { status: "SUCCESS" });
+          return;
+        }
       }
 
       // 获取消息处理器
       const handler = getMessageHandler(data);
 
-      // 打印收到的消息信息（单行格式）
+      // 打印收到的消息信息
       const preview = handler.getPreview(data);
-      logger.log(`收到消息 | 单聊 | ${data.senderNick}(${data.senderStaffId}) | ${preview}`);
+      const chatLabel = isGroup
+        ? `群聊(${data.conversationTitle ?? groupId})`
+        : "单聊";
+      logger.log(`收到消息 | ${chatLabel} | ${data.senderNick}(${data.senderStaffId}) | ${preview}`);
 
       // 记录入站活动
       recordChannelRuntimeState({
@@ -910,12 +997,12 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         })
         .catch((err) => {
           const errMsg = getErrorMessage(err);
-          logger.error(`处理 ${data.msgtype} 消息失败:`, err); // 保留完整错误对象用于日志
+          logger.error(`处理 ${data.msgtype} 消息失败:`, err);
           replyError(data.sessionWebhook, `消息处理失败：${errMsg}`);
         });
     } catch (error) {
       const errMsg = getErrorMessage(error);
-      logger.error("解析消息出错:", error); // 保留完整错误对象用于日志
+      logger.error("解析消息出错:", error);
       recordChannelRuntimeState({
         channel: PLUGIN_ID,
         accountId,

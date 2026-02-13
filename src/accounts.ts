@@ -45,6 +45,9 @@ export function resolveDingTalkAccount(params: {
     clientSecret: "",
     tokenSource: "none",
     allowFrom: ["*"],
+    groupPolicy: "open",
+    groupAllowFrom: [],
+    groups: {},
   };
 
   if (!dingtalkConfig) {
@@ -72,5 +75,8 @@ export function resolveDingTalkAccount(params: {
     clientSecret,
     tokenSource,
     allowFrom: dingtalkConfig.allowFrom ?? ["*"],
+    groupPolicy: dingtalkConfig.groupPolicy ?? "open",
+    groupAllowFrom: dingtalkConfig.groupAllowFrom ?? [],
+    groups: dingtalkConfig.groups ?? {},
   };
 }
