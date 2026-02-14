@@ -209,7 +209,7 @@ const audioMessageHandler: MessageHandler = {
   getPreview: (data) => {
     const content = data.content as AudioContent | undefined;
     const duration = content?.duration;
-    return duration ? `[语音 ${(duration / 1000).toFixed(1)}s]` : "[语音]";
+    return duration ? `[语音 ${Number(duration).toFixed(1)}s]` : "[语音]";
   },
 
   validate: (data) => {
@@ -237,7 +237,7 @@ const audioMessageHandler: MessageHandler = {
         path: saved.path,
         contentType: saved.contentType,
         fileSize: saved.fileSize,
-        duration: content.duration ? content.duration / 1000 : undefined,
+        duration: content.duration != null ? Number(content.duration) : undefined,
       };
 
       return {
@@ -258,7 +258,7 @@ const videoMessageHandler: MessageHandler = {
   getPreview: (data) => {
     const content = data.content as VideoContent | undefined;
     const duration = content?.duration;
-    return duration ? `[视频 ${(duration / 1000).toFixed(1)}s]` : "[视频]";
+    return duration ? `[视频 ${Number(duration).toFixed(1)}s]` : "[视频]";
   },
 
   validate: (data) => {
@@ -286,7 +286,7 @@ const videoMessageHandler: MessageHandler = {
         path: saved.path,
         contentType: saved.contentType,
         fileSize: saved.fileSize,
-        duration: content.duration ? content.duration / 1000 : undefined,
+        duration: content.duration != null ? Number(content.duration) : undefined,
       };
 
       return {

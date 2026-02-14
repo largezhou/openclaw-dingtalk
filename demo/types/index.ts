@@ -51,7 +51,7 @@ export interface RichTextContent {
 // 音频消息内容
 export interface AudioContent {
   downloadCode?: string;
-  duration?: number;      // 语音时长（毫秒）
+  duration?: number;      // 语音时长（秒）
   extension?: string;     // 文件扩展名，如 amr
   mediaId?: string;
   recognition?: string;   // 语音转文字结果
@@ -60,7 +60,7 @@ export interface AudioContent {
 // 视频消息内容
 export interface VideoContent {
   downloadCode?: string;
-  duration?: number;      // 视频时长（毫秒）
+  duration?: number;      // 视频时长（秒）
   extension?: string;     // 文件扩展名，如 mp4
   mediaId?: string;
   videoType?: string;

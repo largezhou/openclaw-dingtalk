@@ -1129,7 +1129,7 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
       const recognition = audioContent?.recognition;
 
       console.log('   下载码:', downloadCode ?? '无');
-      console.log('   时长:', duration ? `${(duration / 1000).toFixed(1)}秒` : '未知');
+      console.log('   时长:', duration ? `${duration.toFixed(1)}秒` : '未知');
       console.log('   格式:', extension);
       console.log('   语音转文字:', recognition ?? '（无）');
 
@@ -1155,7 +1155,7 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
             '| 属性 | 值 |',
             '|---|---|',
             `| 📁 文件名 | \`${filename}\` |`,
-            `| ⏱️ 时长 | ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'} |`,
+            `| ⏱️ 时长 | ${duration ? `${duration.toFixed(1)}秒` : '未知'} |`,
             `| 📊 大小 | ${(audioBuffer.length / 1024).toFixed(2)} KB |`,
             `| 🎵 格式 | ${extension.toUpperCase()} |`
           ];
@@ -1203,7 +1203,7 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
       const videoType = videoContent?.videoType;
 
       console.log('   下载码:', downloadCode ?? '无');
-      console.log('   时长:', duration ? `${(duration / 1000).toFixed(1)}秒` : '未知');
+      console.log('   时长:', duration ? `${duration.toFixed(1)}秒` : '未知');
       console.log('   分辨率:', width && height ? `${width}x${height}` : '未知');
       console.log('   格式:', extension);
       console.log('   视频类型:', videoType ?? '未知');
@@ -1230,7 +1230,7 @@ async function handleRobotMessage(message: DWClientDownStream): Promise<MessageR
             '| 属性 | 值 |',
             '|---|---|',
             `| 📁 文件名 | \`${filename}\` |`,
-            `| ⏱️ 时长 | ${duration ? `${(duration / 1000).toFixed(1)}秒` : '未知'} |`,
+            `| ⏱️ 时长 | ${duration ? `${duration.toFixed(1)}秒` : '未知'} |`,
             `| 📐 分辨率 | ${width && height ? `${width}x${height}` : '未知'} |`,
             `| 📊 大小 | ${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB |`,
             `| 🎬 格式 | ${extension.toUpperCase()} |`

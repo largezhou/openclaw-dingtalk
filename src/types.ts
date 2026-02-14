@@ -100,7 +100,7 @@ export interface PictureContent {
 /** 音频消息内容 */
 export interface AudioContent {
   downloadCode?: string;
-  /** 语音时长（毫秒） */
+  /** 语音时长（秒） */
   duration?: number;
   /** 文件扩展名，如 amr */
   extension?: string;
@@ -112,7 +112,7 @@ export interface AudioContent {
 /** 视频消息内容 */
 export interface VideoContent {
   downloadCode?: string;
-  /** 视频时长（毫秒） */
+  /** 视频时长（秒） */
   duration?: number;
   /** 文件扩展名，如 mp4 */
   extension?: string;
