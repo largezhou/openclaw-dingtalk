@@ -17,8 +17,7 @@ OpenClaw 钉钉（DingTalk）渠道插件，使用 Stream 模式接入企业机�
 ## 安装
 
 ```bash
-# 从 GitHub 安装
-openclaw plugins install https://github.com/largezhou/openclaw-dingtalk.git
+openclaw plugins install @largezhou/ddingtalk
 ```
 
 ## 前置准备
