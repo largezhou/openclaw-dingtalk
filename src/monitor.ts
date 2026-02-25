@@ -540,10 +540,7 @@ export interface MonitorOptions {
   abortSignal?: AbortSignal;
 }
 
-export interface MonitorResult {
-  account: ResolvedDingTalkAccount;
-  stop: () => void;
-}
+export type MonitorResult = Promise<void>;
 
 // Track runtime state in memory
 const runtimeState = new Map<
@@ -1064,29 +1061,26 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
 
   client.connect();
 
-  // 处理中止信号
-  const stopHandler = () => {
-    logger.log(`[${accountId}] 停止 provider`);
-    client.disconnect();
-    recordChannelRuntimeState({
-      channel: PLUGIN_ID,
-      accountId,
-      state: {
-        running: false,
-        lastStopAt: Date.now(),
-      },
-    });
-  };
+  // 返回一个在 abort/disconnect 之前一直 pending 的 Promise。
+  // OpenClaw 框架将 startAccount 返回的 Promise resolve 视为 "channel 已退出"，
+  // 会触发 auto-restart。因此需要保持 pending 直到 abort。
+  return new Promise<void>((resolve) => {
+    const stopHandler = () => {
+      logger.log(`[${accountId}] 停止 provider`);
+      client.disconnect();
+      recordChannelRuntimeState({
+        channel: PLUGIN_ID,
+        accountId,
+        state: {
+          running: false,
+          lastStopAt: Date.now(),
+        },
+      });
+      resolve();
+    };
 
-  if (abortSignal) {
-    abortSignal.addEventListener("abort", stopHandler);
-  }
-
-  return {
-    account,
-    stop: () => {
-      stopHandler();
-      abortSignal?.removeEventListener("abort", stopHandler);
-    },
-  };
+    if (abortSignal) {
+      abortSignal.addEventListener("abort", stopHandler);
+    }
+  });
 }
