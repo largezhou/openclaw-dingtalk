@@ -794,7 +794,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       channel: PLUGIN_ID,
       accountId,
       peer: {
-        kind: isGroup ? "group" : "dm",
+        kind: isGroup ? "group" : "direct",
         id: sender.chatId,
       },
     });
