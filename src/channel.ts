@@ -1,9 +1,13 @@
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
+  setAccountEnabledInConfigSection,
+  deleteAccountFromConfigSection,
+  applyAccountNameToChannelSection,
   formatPairingApproveHint,
   loadWebMedia,
   missingTargetError,
+  normalizeAccountId,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type ChannelAccountSnapshot,
@@ -13,7 +17,6 @@ import path from "path";
 import { getDingTalkRuntime } from "./runtime.js";
 import {
   listDingTalkAccountIds,
-  normalizeAccountId,
   resolveDefaultDingTalkAccountId,
   resolveDingTalkAccount,
 } from "./accounts.js";
@@ -102,10 +105,10 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     enforceOwnerForCommands: true,
   },
   groups: {
-    resolveToolPolicy: ({ cfg, groupId }) => {
+    resolveToolPolicy: ({ cfg, accountId, groupId }) => {
       if (!groupId) return undefined;
-      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-      const groups = dingtalkConfig.groups;
+      const account = resolveDingTalkAccount({ cfg, accountId });
+      const groups = account.groups;
       if (!groups) return undefined;
       const key = Object.keys(groups).find(
         (k) => k === groupId || k.toLowerCase() === groupId.toLowerCase()
@@ -117,32 +120,23 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
   configSchema: buildChannelConfigSchema(DingTalkConfigSchema),
   config: {
     listAccountIds: (cfg) => listDingTalkAccountIds(cfg),
-    resolveAccount: (cfg, _accountId) => resolveDingTalkAccount({ cfg }),
-    defaultAccountId: (_cfg) => resolveDefaultDingTalkAccountId(_cfg),
-    setAccountEnabled: ({ cfg, enabled }) => {
-      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          [PLUGIN_ID]: {
-            ...dingtalkConfig,
-            enabled,
-          },
-        },
-      };
-    },
-    deleteAccount: ({ cfg }) => {
-      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-      const { clientId, clientSecret, ...rest } = dingtalkConfig;
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          [PLUGIN_ID]: rest,
-        },
-      };
-    },
+    resolveAccount: (cfg, accountId) => resolveDingTalkAccount({ cfg, accountId }),
+    defaultAccountId: (cfg) => resolveDefaultDingTalkAccountId(cfg),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: PLUGIN_ID,
+        accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: PLUGIN_ID,
+        accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+        clearBaseFields: ["clientId", "clientSecret", "name"],
+      }),
     isConfigured: (account) => Boolean(account.clientId?.trim() && account.clientSecret?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -151,8 +145,8 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       configured: Boolean(account.clientId?.trim() && account.clientSecret?.trim()),
       tokenSource: account.tokenSource,
     }),
-    resolveAllowFrom: ({ cfg }) =>
-      resolveDingTalkAccount({ cfg }).allowFrom.map((entry) => String(entry)),
+    resolveAllowFrom: ({ cfg, accountId }) =>
+      resolveDingTalkAccount({ cfg, accountId }).allowFrom.map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
@@ -160,13 +154,16 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         .map((entry) => entry.replace(new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i"), "")),
   },
   security: {
-    resolveDmPolicy: ({ cfg }) => {
-      const account = resolveDingTalkAccount({ cfg });
+    resolveDmPolicy: ({ cfg, accountId }) => {
+      const account = resolveDingTalkAccount({ cfg, accountId });
+      const basePath = account.accountId === DEFAULT_ACCOUNT_ID
+        ? `channels.${PLUGIN_ID}`
+        : `channels.${PLUGIN_ID}.accounts.${account.accountId}`;
       return {
         policy: "allowlist",
         allowFrom: account.allowFrom,
-        policyPath: `channels.${PLUGIN_ID}.allowFrom`,
-        allowFromPath: `channels.${PLUGIN_ID}.`,
+        policyPath: `${basePath}.allowFrom`,
+        allowFromPath: `${basePath}.`,
         approveHint: formatPairingApproveHint(PLUGIN_ID),
         normalizeEntry: (raw) => raw.replace(new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i"), ""),
       };
@@ -198,20 +195,14 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
   },
 
   setup: {
-    resolveAccountId: () => normalizeAccountId(),
-    applyAccountName: ({ cfg, name }) => {
-      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          [PLUGIN_ID]: {
-            ...dingtalkConfig,
-            name,
-          },
-        },
-      };
-    },
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToChannelSection({
+        cfg,
+        channelKey: PLUGIN_ID,
+        accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+        name,
+      }),
     validateInput: ({ input }) => {
       const typedInput = input as {
         clientId?: string;
@@ -225,24 +216,57 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       }
       return null;
     },
-    applyAccountConfig: ({ cfg, input }) => {
+    applyAccountConfig: ({ cfg, accountId, input }) => {
       const typedInput = input as {
         name?: string;
         clientId?: string;
         clientSecret?: string;
       };
-      const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
+      const aid = normalizeAccountId(accountId);
 
+      // 应用账号名称
+      let next = applyAccountNameToChannelSection({
+        cfg,
+        channelKey: PLUGIN_ID,
+        accountId: aid,
+        name: typedInput.name,
+      });
+
+      const dingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
+
+      // default 账号 → 写顶层（兼容旧版 + 前端面板）
+      if (aid === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...next,
+          channels: {
+            ...next.channels,
+            [PLUGIN_ID]: {
+              ...dingtalkConfig,
+              enabled: true,
+              ...(typedInput.clientId ? { clientId: typedInput.clientId } : {}),
+              ...(typedInput.clientSecret ? { clientSecret: typedInput.clientSecret } : {}),
+            },
+          },
+        };
+      }
+
+      // 非 default 账号 → 写 accounts[accountId]
       return {
-        ...cfg,
+        ...next,
         channels: {
-          ...cfg.channels,
+          ...next.channels,
           [PLUGIN_ID]: {
             ...dingtalkConfig,
             enabled: true,
-            ...(typedInput.name ? { name: typedInput.name } : {}),
-            ...(typedInput.clientId ? { clientId: typedInput.clientId } : {}),
-            ...(typedInput.clientSecret ? { clientSecret: typedInput.clientSecret } : {}),
+            accounts: {
+              ...dingtalkConfig.accounts,
+              [aid]: {
+                ...dingtalkConfig.accounts?.[aid],
+                enabled: true,
+                ...(typedInput.clientId ? { clientId: typedInput.clientId } : {}),
+                ...(typedInput.clientSecret ? { clientSecret: typedInput.clientSecret } : {}),
+              },
+            },
           },
         },
       };
@@ -324,19 +348,19 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         ),
       };
     },
-    sendText: async ({ to, text, cfg }) => {
-      const account = resolveDingTalkAccount({ cfg });
+    sendText: async ({ to, text, cfg, accountId }) => {
+      const account = resolveDingTalkAccount({ cfg, accountId });
       const result = await sendTextMessage(to, text, { account });
       return { channel: PLUGIN_ID, ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, cfg }) => {
+    sendMedia: async ({ to, text, mediaUrl, cfg, accountId }) => {
       // 没有媒体 URL，提前返回
       if (!mediaUrl) {
         logger.warn("[sendMedia] 没有 mediaUrl，跳过");
         return { channel: PLUGIN_ID, messageId: "", chatId: to };
       }
 
-      const account = resolveDingTalkAccount({ cfg });
+      const account = resolveDingTalkAccount({ cfg, accountId });
 
       try {
         logger.log(`准备发送媒体: ${mediaUrl}`);
@@ -469,40 +493,50 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         abortSignal: ctx.abortSignal,
       });
     },
-    logoutAccount: async ({ cfg }) => {
+    logoutAccount: async ({ cfg, accountId: rawAccountId }) => {
+      const accountId = normalizeAccountId(rawAccountId);
       const nextCfg = { ...cfg } as OpenClawConfig;
       const dingtalkConfig = (cfg.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-      const nextDingTalk = { ...dingtalkConfig };
       let cleared = false;
       let changed = false;
 
-      if (
-        nextDingTalk.clientId ||
-        nextDingTalk.clientSecret
-      ) {
-        delete nextDingTalk.clientId;
-        delete nextDingTalk.clientSecret;
-        cleared = true;
-        changed = true;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        // default 账号：清顶层凭据
+        const nextDingTalk = { ...dingtalkConfig };
+        if (nextDingTalk.clientId || nextDingTalk.clientSecret) {
+          delete nextDingTalk.clientId;
+          delete nextDingTalk.clientSecret;
+          cleared = true;
+          changed = true;
+        }
+        if (changed) {
+          nextCfg.channels = { ...nextCfg.channels, [PLUGIN_ID]: nextDingTalk };
+        }
+      } else {
+        // 非 default 账号：清 accounts[accountId] 凭据
+        const accounts = { ...(dingtalkConfig.accounts ?? {}) };
+        const target = accounts[accountId];
+        if (target && (target.clientId || target.clientSecret)) {
+          const { clientId: _cid, clientSecret: _cs, ...rest } = target;
+          accounts[accountId] = rest;
+          cleared = true;
+          changed = true;
+        }
+        if (changed) {
+          nextCfg.channels = {
+            ...nextCfg.channels,
+            [PLUGIN_ID]: { ...dingtalkConfig, accounts },
+          };
+        }
       }
 
       if (changed) {
-        if (Object.keys(nextDingTalk).length > 0) {
-          nextCfg.channels = { ...nextCfg.channels, [PLUGIN_ID]: nextDingTalk };
-        } else {
-          const nextChannels = { ...nextCfg.channels };
-          delete (nextChannels as Record<string, unknown>)[PLUGIN_ID];
-          if (Object.keys(nextChannels).length > 0) {
-            nextCfg.channels = nextChannels;
-          } else {
-            delete nextCfg.channels;
-          }
-        }
         await getDingTalkRuntime().config.writeConfigFile(nextCfg);
       }
 
       const resolved = resolveDingTalkAccount({
         cfg: changed ? nextCfg : cfg,
+        accountId,
       });
       const loggedOut = resolved.tokenSource === "none";
 

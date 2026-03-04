@@ -23,13 +23,14 @@ export const DingTalkGroupConfigSchema = z.object({
 export type DingTalkGroupConfig = z.infer<typeof DingTalkGroupConfigSchema>;
 
 /**
- * 钉钉渠道配置 Schema（单账户）
+ * 单个钉钉账户配置 Schema
+ * 每个账户对应一个钉钉企业机器人应用
  */
-export const DingTalkConfigSchema = z.object({
-  /** 是否启用钉钉渠道 */
-  enabled: z.boolean().optional(),
+export const DingTalkAccountConfigSchema = z.object({
   /** 账户名称 */
   name: z.string().optional(),
+  /** 是否启用 */
+  enabled: z.boolean().optional(),
   /** 钉钉应用 AppKey */
   clientId: z.string().optional(),
   /** 钉钉应用 AppSecret */
@@ -44,6 +45,38 @@ export const DingTalkConfigSchema = z.object({
   groups: z.record(z.string(), DingTalkGroupConfigSchema).optional(),
 });
 
+export type DingTalkAccountConfig = z.infer<typeof DingTalkAccountConfigSchema>;
+
+/**
+ * 钉钉渠道配置 Schema
+ *
+ * 支持两种配置格式（兼容旧版单账户 + 新版多账户）：
+ *
+ * 单账户（旧版兼容）：
+ * ```json
+ * { "channels": { "ddingtalk": { "clientId": "xxx", "clientSecret": "yyy" } } }
+ * ```
+ *
+ * 多账户（新版）：
+ * ```json
+ * { "channels": { "ddingtalk": {
+ *     "accounts": {
+ *       "bot1": { "clientId": "xxx", "clientSecret": "yyy" },
+ *       "bot2": { "clientId": "aaa", "clientSecret": "bbb" }
+ *     },
+ *     "defaultAccount": "bot1"
+ * } } }
+ * ```
+ *
+ * 顶层字段作为所有账户的默认值，账户级字段可覆盖。
+ */
+export const DingTalkConfigSchema = DingTalkAccountConfigSchema.extend({
+  /** 多账户配置字典，key 为 accountId */
+  accounts: z.record(z.string(), DingTalkAccountConfigSchema).optional(),
+  /** 默认账户 ID（多账户时指定） */
+  defaultAccount: z.string().optional(),
+});
+
 export type DingTalkConfig = z.infer<typeof DingTalkConfigSchema>;
 
 // ======================= Resolved Account Type =======================
@@ -52,7 +85,7 @@ export type DingTalkConfig = z.infer<typeof DingTalkConfigSchema>;
  * 解析后的钉钉账户配置
  */
 export interface ResolvedDingTalkAccount {
-  /** 账户 ID（固定为 default） */
+  /** 账户 ID */
   accountId: string;
   /** 账户名称 */
   name?: string;

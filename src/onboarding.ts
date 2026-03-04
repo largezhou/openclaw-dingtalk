@@ -29,7 +29,7 @@ async function noteDingTalkCredentialsHelp(prompter: {
 }
 
 /**
- * DingTalk Onboarding Adapter（单账户模式）
+ * DingTalk Onboarding Adapter
  */
 export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
@@ -51,12 +51,11 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
     prompter,
   }) => {
     let next = cfg;
+    // 检查 default 账号是否已配置凭据
     const resolvedAccount = resolveDingTalkAccount({ cfg: next });
     const accountConfigured = Boolean(
       resolvedAccount.clientId?.trim() && resolvedAccount.clientSecret?.trim()
     );
-    const dingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-    const hasConfigCredentials = Boolean(dingtalkConfig.clientId);
 
     let clientId: string | null = null;
     let clientSecret: string | null = null;
@@ -65,7 +64,7 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
       await noteDingTalkCredentialsHelp(prompter);
     }
 
-    if (hasConfigCredentials) {
+    if (accountConfigured) {
       const keep = await prompter.confirm({
         message: "DingTalk credentials already configured. Keep them?",
         initialValue: true,
@@ -99,14 +98,15 @@ export const dingtalkOnboardingAdapter: ChannelOnboardingAdapter = {
       ).trim();
     }
 
+    // onboard 永远写顶层（default 账号）
     if (clientId && clientSecret) {
-      const updatedDingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
+      const dingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
       next = {
         ...next,
         channels: {
           ...next.channels,
           [PLUGIN_ID]: {
-            ...updatedDingtalkConfig,
+            ...dingtalkConfig,
             enabled: true,
             clientId,
             clientSecret,
