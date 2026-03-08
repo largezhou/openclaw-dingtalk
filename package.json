@@ -19,7 +19,6 @@
     "README.md"
   ],
   "scripts": {
-    "demo": "npx tsx demo/demo.ts"
   },
   "keywords": [
     "dingtalk",
@@ -31,9 +30,6 @@
   "author": "largezhou",
   "license": "MIT",
   "dependencies": {
-    "@alicloud/dingtalk": "^2.2.38",
-    "@alicloud/openapi-client": "^0.4.15",
-    "@alicloud/tea-util": "^1.4.11",
     "dingtalk-stream": "^2.1.4"
   },
   "devDependencies": {

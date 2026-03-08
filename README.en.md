@@ -339,19 +339,6 @@ Find the robot you created in DingTalk, and you can start a normal conversation.
 
 ---
 
-## Demo
-
-The project includes a standalone demo that can test the DingTalk robot independently without the OpenClaw framework:
-
-```bash
-# Configure environment variables
-cp .env.example .env
-# Edit .env and fill in CLIENT_ID and CLIENT_SECRET
-
-# Run demo
-pnpm run demo
-```
-
 ## Development
 
 ```bash

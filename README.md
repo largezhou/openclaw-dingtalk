@@ -339,19 +339,6 @@ openclaw gateway --verbose
 
 ---
 
-## Demo
-
-项目包含独立的 demo 示例，可以脱离 OpenClaw 框架单独测试钉钉机器人：
-
-```bash
-# 配置环境变量
-cp .env.example .env
-# 编辑 .env 填入 CLIENT_ID 和 CLIENT_SECRET
-
-# 运行 demo
-pnpm run demo
-```
-
 ## 开发
 
 ```bash

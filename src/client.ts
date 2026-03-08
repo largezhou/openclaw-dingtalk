@@ -1,14 +1,41 @@
-import * as $OpenApi from "@alicloud/openapi-client";
-import * as $Util from "@alicloud/tea-util";
-import dingtalk from "@alicloud/dingtalk";
 import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody } from "./types.js";
 import { logger } from "./logger.js";
 
-const { oauth2_1_0, robot_1_0 } = dingtalk;
+// ======================= 钉钉 API 基础封装 =======================
 
-// SDK 客户端类型
-type OAuth2Client = InstanceType<typeof oauth2_1_0.default>;
-type RobotClient = InstanceType<typeof robot_1_0.default>;
+const DINGTALK_API_BASE = "https://api.dingtalk.com";
+
+/**
+ * 钉钉新版 API 统一调用（v1.0 接口）
+ * @param path - API 路径，如 `/v1.0/oauth2/accessToken`
+ * @param body - 请求体
+ * @param accessToken - 可选，需要鉴权的接口传入
+ */
+async function dingtalkApi<T = Record<string, unknown>>(
+  path: string,
+  body: Record<string, unknown>,
+  accessToken?: string
+): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (accessToken) {
+    headers["x-acs-dingtalk-access-token"] = accessToken;
+  }
+
+  const response = await fetch(`${DINGTALK_API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`钉钉 API 请求失败 [${response.status}]: ${text}`);
+  }
+
+  return (await response.json()) as T;
+}
 
 // ======================= Access Token 缓存 =======================
 
@@ -18,26 +45,6 @@ interface TokenCache {
 }
 
 const tokenCacheMap = new Map<string, TokenCache>();
-
-/**
- * 创建 OAuth2 客户端
- */
-function createOAuth2Client(): OAuth2Client {
-  const config = new $OpenApi.Config({});
-  config.protocol = "https";
-  config.regionId = "central";
-  return new oauth2_1_0.default(config);
-}
-
-/**
- * 创建 Robot 客户端
- */
-function createRobotClient(): RobotClient {
-  const config = new $OpenApi.Config({});
-  config.protocol = "https";
-  config.regionId = "central";
-  return new robot_1_0.default(config);
-}
 
 /**
  * 获取钉钉 access_token
@@ -51,17 +58,17 @@ export async function getAccessToken(account: ResolvedDingTalkAccount): Promise<
     return cached.token;
   }
 
-  const oauth2Client = createOAuth2Client();
-  const request = new oauth2_1_0.GetAccessTokenRequest({
-    appKey: account.clientId,
-    appSecret: account.clientSecret,
-  });
+  const result = await dingtalkApi<{ accessToken?: string; expireIn?: number }>(
+    "/v1.0/oauth2/accessToken",
+    {
+      appKey: account.clientId,
+      appSecret: account.clientSecret,
+    }
+  );
 
-  const response = await oauth2Client.getAccessToken(request);
-
-  if (response.body?.accessToken) {
-    const token = response.body.accessToken;
-    const expireTime = Date.now() + (response.body.expireIn ?? 7200) * 1000;
+  if (result.accessToken) {
+    const token = result.accessToken;
+    const expireTime = Date.now() + (result.expireIn ?? 7200) * 1000;
     tokenCacheMap.set(cacheKey, { token, expireTime });
     return token;
   }
@@ -159,26 +166,19 @@ async function sendOTOMessage(
   options: SendMessageOptions
 ): Promise<SendMessageResult> {
   const accessToken = await getAccessToken(options.account);
-  const robotClient = createRobotClient();
 
-  const headers = new robot_1_0.BatchSendOTOHeaders({
-    xAcsDingtalkAccessToken: accessToken,
-  });
-
-  const request = new robot_1_0.BatchSendOTORequest({
-    robotCode: options.account.clientId,
-    userIds: [userId],
-    msgKey,
-    msgParam: JSON.stringify(msgParam),
-  });
-
-  const response = await robotClient.batchSendOTOWithOptions(
-    request,
-    headers,
-    new $Util.RuntimeOptions({})
+  const result = await dingtalkApi<{ processQueryKey?: string }>(
+    "/v1.0/robot/oToMessages/batchSend",
+    {
+      robotCode: options.account.clientId,
+      userIds: [userId],
+      msgKey,
+      msgParam: JSON.stringify(msgParam),
+    },
+    accessToken
   );
 
-  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-${Date.now()}`;
+  const processQueryKey = result.processQueryKey ?? `dingtalk-${Date.now()}`;
 
   return {
     messageId: processQueryKey,
@@ -196,26 +196,19 @@ async function sendGroupMessage(
   options: SendMessageOptions
 ): Promise<SendMessageResult> {
   const accessToken = await getAccessToken(options.account);
-  const robotClient = createRobotClient();
 
-  const headers = new robot_1_0.OrgGroupSendHeaders({
-    xAcsDingtalkAccessToken: accessToken,
-  });
-
-  const request = new robot_1_0.OrgGroupSendRequest({
-    robotCode: options.account.clientId,
-    openConversationId,
-    msgKey,
-    msgParam: JSON.stringify(msgParam),
-  });
-
-  const response = await robotClient.orgGroupSendWithOptions(
-    request,
-    headers,
-    new $Util.RuntimeOptions({})
+  const result = await dingtalkApi<{ processQueryKey?: string }>(
+    "/v1.0/robot/groupMessages/send",
+    {
+      robotCode: options.account.clientId,
+      openConversationId,
+      msgKey,
+      msgParam: JSON.stringify(msgParam),
+    },
+    accessToken
   );
 
-  const processQueryKey = response.body?.processQueryKey ?? `dingtalk-group-${Date.now()}`;
+  const processQueryKey = result.processQueryKey ?? `dingtalk-group-${Date.now()}`;
 
   return {
     messageId: processQueryKey,
@@ -457,25 +450,18 @@ export async function getFileDownloadUrl(
   account: ResolvedDingTalkAccount
 ): Promise<string> {
   const accessToken = await getAccessToken(account);
-  const robotClient = createRobotClient();
 
-  const headers = new robot_1_0.RobotMessageFileDownloadHeaders({
-    xAcsDingtalkAccessToken: accessToken,
-  });
-
-  const request = new robot_1_0.RobotMessageFileDownloadRequest({
-    downloadCode,
-    robotCode: account.clientId,
-  });
-
-  const response = await robotClient.robotMessageFileDownloadWithOptions(
-    request,
-    headers,
-    new $Util.RuntimeOptions({})
+  const result = await dingtalkApi<{ downloadUrl?: string }>(
+    "/v1.0/robot/messageFiles/download",
+    {
+      downloadCode,
+      robotCode: account.clientId,
+    },
+    accessToken
   );
 
-  if (response.body?.downloadUrl) {
-    return response.body.downloadUrl;
+  if (result.downloadUrl) {
+    return result.downloadUrl;
   }
 
   throw new Error("获取下载链接失败: 返回结果为空");
