@@ -7,12 +7,14 @@ OpenClaw DingTalk channel plugin, using Stream mode to connect enterprise robots
 ## Features
 
 - ✅ **Stream Mode**: No public IP or domain required, works out of the box
+- ✅ **Multi-Account Support**: Connect multiple DingTalk robots simultaneously with separate credentials and permissions
+- ✅ **Multi-Agent Routing**: Route different accounts, group chats, and direct messages to different Agents
 - ✅ **Private/Group Chat**: Supports private chat and group chat (only when @robot)
 - ✅ **Text Messages**: Send and receive text messages
 - ✅ **Markdown Reply**: Robot replies in Markdown format
 - ✅ **Image Messages**: Receive images from users, send local/remote images
 - ✅ **Voice, Video, File, Rich Text**: Receive voice, video, file, and rich text messages from users
-- ✅ **File Reply**: Support replying with files; audio, video, etc. are sent as files uniformly (sending as voice/video requires duration and video cover, to be supported later)
+- ✅ **File Reply**: Support replying with files; audio, video, etc. are sent as files uniformly
 - ✅ **Active Message Push**: Supports active message pushing, configurable for reminders or scheduled tasks
 - ✅ **OpenClaw Commands**: Supports official OpenClaw commands such as /new, /compact
 
@@ -161,6 +163,166 @@ Edit `~/.openclaw/openclaw.json`:
 
 ---
 
+## Multi-Account Configuration
+
+Supports connecting multiple DingTalk robots simultaneously, each corresponding to an independent account. Use cases:
+
+- Different departments use different robots
+- A single OpenClaw instance serves multiple DingTalk organizations
+- Different robots with different permission policies
+
+### Add a New Account
+
+Add a new account via the wizard, which will interactively prompt for the account ID and credentials:
+
+```bash
+openclaw channels add
+```
+
+### Configuration File Example
+
+Edit `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "channels": {
+    "ddingtalk": {
+      "enabled": true,
+      "accounts": {
+        "bot-hr": {
+          "name": "HR Assistant",
+          "clientId": "dingxxxxxxxx",
+          "clientSecret": "secret_1"
+        },
+        "bot-tech": {
+          "name": "Tech Support",
+          "clientId": "dingyyyyyyyy",
+          "clientSecret": "secret_2"
+        }
+      },
+      "defaultAccount": "bot-hr"
+    }
+  }
+}
+```
+
+### Group-Specific Configuration
+
+You can set independent permissions and behavior for specific group chats:
+
+```json
+{
+  "accounts": {
+    "bot-hr": {
+      "enabled": true,
+      "clientId": "dingxxxxxxxx",
+      "clientSecret": "secret_1"
+    }
+  }
+}
+```
+
+### Single Account Compatibility
+
+If you only have one robot, there is no need to use `accounts`. You can configure directly at the top level (compatible with the legacy format):
+
+```json
+{
+  "channels": {
+    "ddingtalk": {
+      "enabled": true,
+      "clientId": "your_app_key",
+      "clientSecret": "your_app_secret"
+    }
+  }
+}
+```
+
+---
+
+## Multi-Agent Routing
+
+Through OpenClaw's routing bindings mechanism, you can assign different accounts, group chats, and direct messages to different Agents.
+
+> For more about multi-agent concepts and usage, see the [OpenClaw Documentation - Multi-Agent](https://docs.openclaw.ai/zh-CN/concepts/multi-agent).
+
+### Bind Agents by Account
+
+Use the command line to bind different DingTalk accounts to different Agents:
+
+```bash
+# Bind bot-hr account to hr-agent
+openclaw agents bind --agent hr-agent --bind ddingtalk:bot-hr
+
+# Bind bot-tech account to tech-agent
+openclaw agents bind --agent tech-agent --bind ddingtalk:bot-tech
+
+# Bind the entire DingTalk channel (all accounts) to the default agent
+openclaw agents bind --agent default-agent --bind ddingtalk
+```
+
+View current bindings:
+
+```bash
+openclaw agents bindings
+```
+
+Remove bindings:
+
+```bash
+openclaw agents unbind --agent hr-agent --bind ddingtalk:bot-hr
+```
+
+### Bind Agents by Group/Direct Chat
+
+The CLI currently only supports `channel[:accountId]` level bindings. To bind specific group chats or direct messages to different Agents, manually edit the `bindings` configuration in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "agents": {
+    "list": [
+      { "id": "hr-agent", "name": "HR Assistant" },
+      { "id": "tech-agent", "name": "Tech Support" },
+      { "id": "general-agent", "name": "General Assistant" }
+    ]
+  },
+  "bindings": [
+    {
+      "agentId": "tech-agent",
+      "comment": "Tech group routes to Tech Support Agent",
+      "match": {
+        "channel": "ddingtalk",
+        "peer": {
+          "kind": "group",
+          "id": "cidTechGroup001"
+        }
+      }
+    },
+    {
+      "agentId": "hr-agent",
+      "comment": "Zhang San's DM routes to HR Assistant",
+      "match": {
+        "channel": "ddingtalk",
+        "peer": {
+          "kind": "direct",
+          "id": "user_zhangsan_staffId"
+        }
+      }
+    },
+    {
+      "agentId": "general-agent",
+      "comment": "Other messages from bot-hr go to General Assistant",
+      "match": {
+        "channel": "ddingtalk",
+        "accountId": "bot-hr"
+      }
+    }
+  ]
+}
+```
+
+---
+
 ## Step 3: Start and Test
 
 ### 1. Start the Gateway
@@ -202,6 +364,7 @@ pnpm pack
 
 ## References
 
+- [OpenClaw Multi-Agent Documentation](https://docs.openclaw.ai/concepts/multi-agent)
 - [DingTalk Open Platform - Stream Mode](https://opensource.dingtalk.com/developerpedia/docs/learn/stream/overview)
 - [DingTalk Open Platform - Robot Receive Messages](https://open.dingtalk.com/document/orgapp/robot-receive-message)
 - [DingTalk Open Platform - Robot Send Messages](https://open.dingtalk.com/document/orgapp/robot-send-message)

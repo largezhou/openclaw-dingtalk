@@ -1,5 +1,5 @@
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream";
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import { recordInboundSession, type OpenClawConfig, type RuntimeEnv } from "openclaw/plugin-sdk";
 import type { DingTalkMessageData, ResolvedDingTalkAccount, DingTalkGroupConfig, AudioContent, VideoContent, FileContent, PictureContent, RichTextContent, RichTextElement, RichTextPictureElement } from "./types.js";
 import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl, sendTextMessage } from "./client.js";
 import { resolveDingTalkAccount } from "./accounts.js";
@@ -778,7 +778,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     return { textContent, rawBody };
   };
 
-  /** 构建入站消息上下文 */
+  /** 构建入站消息上下文（含路由信息） */
   const buildInboundContext = (
     data: DingTalkMessageData,
     sender: ReturnType<typeof buildSenderInfo>,
@@ -845,10 +845,12 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     // 合并媒体字段
     const mediaFields = buildMediaContextFields(media);
 
-    return pluginRuntime.channel.reply.finalizeInboundContext({
+    const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
       ...baseContext,
       ...mediaFields,
     });
+
+    return { ctxPayload, route };
   };
 
   /** 创建回复分发器 */
@@ -902,10 +904,33 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       // 2. 构建消息体
       const { rawBody } = buildMessageBody(data, media);
 
-      // 3. 构建入站上下文
-      const ctxPayload = buildInboundContext(data, sender, rawBody, media);
+      // 3. 构建入站上下文（含路由信息）
+      const { ctxPayload, route } = buildInboundContext(data, sender, rawBody, media);
 
-      // 4. 分发消息给 OpenClaw
+      // 4. 持久化 session 元数据 + 更新回复路由（参照 Discord/Telegram）
+      const storePath = pluginRuntime.channel.session.resolveStorePath(undefined, {
+        agentId: route.agentId,
+      });
+      const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+
+      await recordInboundSession({
+        storePath,
+        sessionKey: persistedSessionKey,
+        ctx: ctxPayload,
+        updateLastRoute: !sender.isGroup
+          ? {
+              sessionKey: route.mainSessionKey,
+              channel: PLUGIN_ID,
+              to: sender.toAddress,
+              accountId: route.accountId,
+            }
+          : undefined,
+        onRecordError: (err) => {
+          logger.error("recordInboundSession failed:", err);
+        },
+      });
+
+      // 5. 分发消息给 OpenClaw
       const { queuedFinal } = await pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: ctxPayload,
         cfg: config,
@@ -958,7 +983,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       // 打印收到的消息信息
       const preview = handler.getPreview(data);
       const chatLabel = isGroup
-        ? `群聊(${data.conversationTitle ?? groupId})`
+        ? `群聊(${data.conversationTitle ? `${data.conversationTitle} | ${groupId}` : groupId})`
         : "单聊";
       logger.log(`收到消息 | ${chatLabel} | ${data.senderNick}(${data.senderStaffId}) | ${preview}`);
 
