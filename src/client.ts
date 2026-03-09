@@ -290,7 +290,7 @@ export async function sendImageMessage(
 /**
  * 发送语音消息（自动路由群聊/单聊）
  * @param mediaId - 语音文件的 mediaId（通过 uploadMedia 获取）
- * @param duration - 语音时长（秒），可选
+ * @param duration - 语音时长（毫秒），可选
  */
 export async function sendAudioMessage(
   to: string,
@@ -314,6 +314,7 @@ export async function sendAudioMessage(
 
 /**
  * 发送视频消息（自动路由群聊/单聊）
+ * @param duration - 视频时长（秒），可选
  */
 export async function sendVideoMessage(
   to: string,

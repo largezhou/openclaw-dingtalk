@@ -21,11 +21,12 @@ import {
   resolveDingTalkAccount,
 } from "./accounts.js";
 import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount, type DingTalkGroupConfig } from "./types.js";
-import { sendTextMessage, sendImageMessage, sendFileMessage, uploadMedia, probeDingTalkBot, inferMediaType, isGroupTarget } from "./client.js";
+import { sendTextMessage, sendImageMessage, sendFileMessage, sendAudioMessage, sendVideoMessage, uploadMedia, probeDingTalkBot, inferMediaType, isGroupTarget } from "./client.js";
 import { logger } from "./logger.js";
 import { monitorDingTalkProvider } from "./monitor.js";
 import { dingtalkOnboardingAdapter } from "./onboarding.js";
 import { PLUGIN_ID } from "./constants.js";
+import { hasFFmpeg, probeMediaBuffer } from "./ffmpeg.js";
 
 // ======================= Target Normalization =======================
 
@@ -372,26 +373,91 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
 
         logger.log(`加载媒体成功 | type: ${mediaType} | mimeType: ${mimeType} | size: ${(media.buffer.length / 1024).toFixed(2)} KB`);
 
-        // 上传到钉钉
         const fileName = media.fileName || path.basename(mediaUrl) || `file_${Date.now()}`;
+        const ext = path.extname(fileName).slice(1) || "file";
+
+        // 上传到钉钉
         const uploadResult = await uploadMedia(media.buffer, fileName, account, {
           mimeType,
           type: mediaType,
         });
 
-        // 统一使用文件发送（语音/视频因格式限制和参数要求，也降级为文件）
-        const ext = path.extname(fileName).slice(1) || "file";
         let sendResult: { messageId: string; chatId: string };
 
         if (mediaType === "image") {
           // 图片使用 photoURL
           sendResult = await sendImageMessage(to, uploadResult.url, { account });
-        } else {
-          // 语音、视频、文件统一使用文件发送
-          sendResult = await sendFileMessage(to, uploadResult.mediaId, fileName, ext, { account });
-        }
+          logger.log("发送图片消息成功");
+        } else if (mediaType === "voice" && hasFFmpeg()) {
+          // 语音：使用 ffprobe 获取时长，发送原生语音消息
+          try {
+            const probe = await probeMediaBuffer(media.buffer, fileName, "voice");
+            sendResult = await sendAudioMessage(to, uploadResult.mediaId, {
+              account,
+              duration: String(probe.duration),
+            });
+            logger.log(`发送语音消息成功 | duration: ${(probe.duration / 1000).toFixed(1)}s`);
+          } catch (probeErr) {
+            logger.warn(`[sendMedia] 语音探测失败，降级为文件发送: ${probeErr}`);
+            sendResult = await sendFileMessage(to, uploadResult.mediaId, fileName, ext, { account });
+            logger.log("发送语音消息成功（降级为文件形式）");
+          }
+        } else if (mediaType === "video" && hasFFmpeg()) {
+          // 视频：使用 ffprobe 获取时长和分辨率，提取封面，发送原生视频消息
+          try {
+            const probe = await probeMediaBuffer(media.buffer, fileName, "video");
+            const videoOpts: {
+              account: typeof account;
+              duration?: string;
+              picMediaId?: string;
+              width?: string;
+              height?: string;
+            } = { account };
 
-        logger.log(`发送${mediaType}消息成功（${mediaType !== "image" ? "文件形式" : "图片形式"}）`);
+            if (probe.duration) {
+              videoOpts.duration = String(Math.floor(probe.duration / 1000));
+            }
+            if (probe.width) {
+              videoOpts.width = String(probe.width);
+            }
+            if (probe.height) {
+              videoOpts.height = String(probe.height);
+            }
+
+            // 上传封面图
+            if (probe.coverBuffer) {
+              try {
+                const coverUpload = await uploadMedia(probe.coverBuffer, "cover.jpg", account, {
+                  mimeType: "image/jpeg",
+                  type: "image",
+                });
+                videoOpts.picMediaId = coverUpload.mediaId;
+                logger.log(`视频封面上传成功 | picMediaId: ${coverUpload.mediaId}`);
+              } catch (coverErr) {
+                logger.warn(`[sendMedia] 视频封面上传失败，将不带封面发送: ${coverErr}`);
+              }
+            }
+
+            sendResult = await sendVideoMessage(to, uploadResult.mediaId, videoOpts);
+            logger.log(`发送视频消息成功 | duration: ${(probe.duration / 1000).toFixed(1)}s | ${probe.width}x${probe.height}`);
+          } catch (probeErr) {
+            logger.warn(`[sendMedia] 视频探测失败，降级为文件发送: ${probeErr}`);
+            sendResult = await sendFileMessage(to, uploadResult.mediaId, fileName, ext, { account });
+            logger.log("发送视频消息成功（降级为文件形式）");
+          }
+        } else {
+          // 文件 或 无 ffmpeg 的语音/视频：降级为文件发送
+          sendResult = await sendFileMessage(to, uploadResult.mediaId, fileName, ext, { account });
+
+          if ((mediaType === "voice" || mediaType === "video") && !hasFFmpeg()) {
+            logger.log(`发送${mediaType}消息成功（文件形式，系统未安装 ffmpeg）`);
+            // 附带降级提示文本
+            const hint = `⚠️ 系统未安装 ffmpeg，${mediaType === "voice" ? "语音" : "视频"}已降级为文件发送。如需原生${mediaType === "voice" ? "语音" : "视频"}体验，请安装 ffmpeg。`;
+            await sendTextMessage(to, hint, { account });
+          } else {
+            logger.log("发送文件消息成功");
+          }
+        }
 
         // 如果有文本，再发送文本消息
         if (text?.trim()) {
