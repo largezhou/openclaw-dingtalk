@@ -29,19 +29,18 @@
   "author": "largezhou",
   "license": "MIT",
   "dependencies": {
-    "dingtalk-stream": "^2.1.4"
+    "dingtalk-stream": "^2.1.4",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "dotenv": "^17.3.1",
     "openclaw": "*",
     "tsx": "^4.6.0",
-    "typescript": "^5.3.0",
-    "zod": "^4.3.6"
+    "typescript": "^5.3.0"
   },
   "peerDependencies": {
-    "openclaw": "*",
-    "zod": "^4.0.0"
+    "openclaw": "*"
   },
   "openclaw": {
     "extensions": [
