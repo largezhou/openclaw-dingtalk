@@ -13,8 +13,8 @@ OpenClaw DingTalk channel plugin, using Stream mode to connect enterprise robots
 - ✅ **Text Messages**: Send and receive text messages
 - ✅ **Markdown Reply**: Robot replies in Markdown format
 - ✅ **Image Messages**: Receive images from users, send local/remote images
-- ✅ **Voice, Video, File, Rich Text**: Receive voice, video, file, and rich text messages from users
-- ✅ **File Reply**: Support replying with files; audio, video, etc. are sent as files uniformly
+- ✅ **Audio & Video Messages**: Send and receive voice and video messages
+- ✅ **File Messages**: Send and receive files, including rich text messages
 - ✅ **Active Message Push**: Supports active message pushing, configurable for reminders or scheduled tasks
 - ✅ **OpenClaw Commands**: Supports official OpenClaw commands such as /new, /compact
 
