@@ -693,10 +693,14 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
   });
 
   // 创建钉钉 Stream 客户端
+  // keepAlive: true 启用 WebSocket ping/pong 心跳检测（每 8s），
+  // 当连接"半死不活"（TCP 未关闭但数据已无法传输）时能主动检测到并 terminate，
+  // 配合 autoReconnect（默认 true）触发自动重连，避免长时间静默断连。
   const client = new DWClient({
     clientId,
     clientSecret,
     debug: false,
+    keepAlive: true,
   });
 
   // ============================================================================
