@@ -704,6 +704,25 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
   });
 
   // ============================================================================
+  // 🔧 修复 dingtalk-stream SDK 的 keepAlive 重连 bug
+  // SDK 的 close 事件处理中没有 clearInterval(heartbeatIntervallId)，
+  // 导致重连时旧的 heartbeat interval 还在运行，会 terminate 正在建立的新连接。
+  // 这里通过 monkey-patch _connect，在每次连接前先清理旧 interval。
+  // ============================================================================
+  const originalInternalConnect = (client as any)._connect.bind(client);
+  (client as any)._connect = function (this: any) {
+    // 清理上一轮的 heartbeat interval，防止它干扰新连接
+    if (this.heartbeatIntervallId !== undefined) {
+      clearInterval(this.heartbeatIntervallId);
+      this.heartbeatIntervallId = undefined;
+      logger.info('[PATCH] Cleared stale heartbeat interval before reconnect');
+    }
+    // 重置心跳状态，给新连接一个干净的起点
+    this.isAlive = false;
+    return originalInternalConnect();
+  };
+
+  // ============================================================================
   // 群聊策略与 Mention 门控
   // ============================================================================
 
