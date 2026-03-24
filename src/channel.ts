@@ -1,4 +1,10 @@
 import {
+  type ChannelPlugin,
+  type ChannelStatusIssue,
+  type ChannelAccountSnapshot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk";
+import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
@@ -8,11 +14,7 @@ import {
   loadWebMedia,
   missingTargetError,
   normalizeAccountId,
-  type ChannelPlugin,
-  type ChannelStatusIssue,
-  type ChannelAccountSnapshot,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "./compat.js";
 import path from "path";
 import { getDingTalkRuntime } from "./runtime.js";
 import {

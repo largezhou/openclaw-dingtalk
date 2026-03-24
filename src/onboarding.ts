@@ -1,5 +1,5 @@
 import type { ChannelOnboardingAdapter } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, promptAccountId } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, promptAccountId } from "./compat.js";
 import type { DingTalkConfig } from "./types.js";
 import {
   listDingTalkAccountIds,

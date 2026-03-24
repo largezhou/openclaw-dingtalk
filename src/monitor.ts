@@ -1,5 +1,6 @@
 import { DWClient, TOPIC_ROBOT, type DWClientDownStream } from "dingtalk-stream";
-import { recordInboundSession, type OpenClawConfig, type RuntimeEnv } from "openclaw/plugin-sdk";
+import { type OpenClawConfig, type RuntimeEnv } from "openclaw/plugin-sdk";
+import { recordInboundSession } from "./compat.js";
 import type { DingTalkMessageData, ResolvedDingTalkAccount, DingTalkGroupConfig, AudioContent, VideoContent, FileContent, PictureContent, RichTextContent, RichTextElement, RichTextPictureElement } from "./types.js";
 import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl, sendTextMessage } from "./client.js";
 import { resolveDingTalkAccount } from "./accounts.js";

@@ -1,8 +1,10 @@
 import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "./compat.js";
 import type {
   DingTalkConfig,
   DingTalkAccountConfig,
