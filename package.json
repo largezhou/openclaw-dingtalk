@@ -1,6 +1,6 @@
 {
   "name": "@largezhou/ddingtalk",
-  "version": "1.4.3",
+  "version": "2.0.0",
   "description": "OpenClaw DingTalk (钉钉) channel plugin",
   "main": "index.ts",
   "type": "module",
@@ -30,18 +30,16 @@
   "license": "MIT",
   "dependencies": {
     "dingtalk-stream": "^2.1.4",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "openclaw": ">=2026.3.22"
   },
   "devDependencies": {
-    "@types/node": "^20.10.0",
+    "@types/node": "^22.0.0",
     "dotenv": "^17.3.1",
-    "openclaw": "<=2026.3.13",
     "tsx": "^4.6.0",
     "typescript": "^5.3.0"
   },
-  "peerDependencies": {
-    "openclaw": "<=2026.3.13"
-  },
+  "peerDependencies": {},
   "openclaw": {
     "extensions": [
       "./index.ts"

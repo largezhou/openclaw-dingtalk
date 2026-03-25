@@ -2,7 +2,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/core";
 import type {
   DingTalkConfig,
   DingTalkAccountConfig,

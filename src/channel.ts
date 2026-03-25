@@ -3,16 +3,14 @@ import {
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
   deleteAccountFromConfigSection,
-  applyAccountNameToChannelSection,
   formatPairingApproveHint,
-  loadWebMedia,
-  missingTargetError,
   normalizeAccountId,
   type ChannelPlugin,
-  type ChannelStatusIssue,
-  type ChannelAccountSnapshot,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/core";
+import type { ChannelStatusIssue, ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import path from "path";
 import { getDingTalkRuntime } from "./runtime.js";
 import {
@@ -24,9 +22,10 @@ import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount
 import { sendTextMessage, sendImageMessage, sendFileMessage, sendAudioMessage, sendVideoMessage, uploadMedia, probeDingTalkBot, inferMediaType, isGroupTarget } from "./client.js";
 import { logger } from "./logger.js";
 import { monitorDingTalkProvider } from "./monitor.js";
-import { dingtalkOnboardingAdapter } from "./onboarding.js";
 import { PLUGIN_ID } from "./constants.js";
 import { hasFFmpeg, probeMediaBuffer } from "./ffmpeg.js";
+import { dingtalkSetupAdapter } from "./setup-core.js";
+import { dingtalkSetupWizard } from "./setup-surface.js";
 
 // ======================= Target Normalization =======================
 
@@ -93,7 +92,7 @@ const meta = {
 export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
   id: PLUGIN_ID,
   meta,
-  onboarding: dingtalkOnboardingAdapter,
+  setupWizard: dingtalkSetupWizard,
   capabilities: {
     chatTypes: ["direct", "group"],
     reactions: false,
@@ -195,84 +194,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     },
   },
 
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: PLUGIN_ID,
-        accountId: accountId ?? DEFAULT_ACCOUNT_ID,
-        name,
-      }),
-    validateInput: ({ input }) => {
-      const typedInput = input as {
-        clientId?: string;
-        clientSecret?: string;
-      };
-      if (!typedInput.clientId) {
-        return "DingTalk requires clientId.";
-      }
-      if (!typedInput.clientSecret) {
-        return "DingTalk requires clientSecret.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const typedInput = input as {
-        name?: string;
-        clientId?: string;
-        clientSecret?: string;
-      };
-      const aid = normalizeAccountId(accountId);
-
-      // 应用账号名称
-      let next = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: PLUGIN_ID,
-        accountId: aid,
-        name: typedInput.name,
-      });
-
-      const dingtalkConfig = (next.channels?.[PLUGIN_ID] ?? {}) as DingTalkConfig;
-
-      // default 账号 → 写顶层（兼容旧版 + 前端面板）
-      if (aid === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            [PLUGIN_ID]: {
-              ...dingtalkConfig,
-              enabled: true,
-              ...(typedInput.clientId ? { clientId: typedInput.clientId } : {}),
-              ...(typedInput.clientSecret ? { clientSecret: typedInput.clientSecret } : {}),
-            },
-          },
-        };
-      }
-
-      // 非 default 账号 → 写 accounts[accountId]
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          [PLUGIN_ID]: {
-            ...dingtalkConfig,
-            enabled: true,
-            accounts: {
-              ...dingtalkConfig.accounts,
-              [aid]: {
-                ...dingtalkConfig.accounts?.[aid],
-                enabled: true,
-                ...(typedInput.clientId ? { clientId: typedInput.clientId } : {}),
-                ...(typedInput.clientSecret ? { clientSecret: typedInput.clientSecret } : {}),
-              },
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: dingtalkSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getDingTalkRuntime().channel.text.chunkMarkdownText(text, limit),
