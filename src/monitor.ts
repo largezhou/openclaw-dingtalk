@@ -3,7 +3,7 @@ import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { DingTalkMessageData, ResolvedDingTalkAccount, DingTalkGroupConfig, AudioContent, VideoContent, FileContent, PictureContent, RichTextContent, RichTextElement, RichTextPictureElement } from "./types.js";
-import { replyViaWebhook, getFileDownloadUrl, downloadFromUrl, sendTextMessage } from "./client.js";
+import { getFileDownloadUrl, downloadFromUrl, sendTextMessage } from "./client.js";
 import { resolveDingTalkAccount } from "./accounts.js";
 import { getDingTalkRuntime } from "./runtime.js";
 import { logger } from "./logger.js";
@@ -525,10 +525,20 @@ function getMessageHandler(data: DingTalkMessageData): MessageHandler {
   return messageHandlers.find((h) => h.canHandle(data))!;
 }
 
-/** 通过 webhook 发送错误回复（静默失败） */
-function replyError(webhook: string | undefined, message: string | undefined): void {
-  if (!webhook || !message) return;
-  replyViaWebhook(webhook, message).catch((err) => {
+/** 发送错误回复的参数 */
+interface ReplyErrorOptions {
+  /** 发送目标（userId 或 chat:groupId） */
+  to: string;
+  /** 钉钉账户 */
+  account: ResolvedDingTalkAccount;
+  /** 错误消息 */
+  message?: string;
+}
+
+/** 通过 API 发送错误回复（静默失败） */
+function replyError(options: ReplyErrorOptions): void {
+  if (!options.message) return;
+  sendTextMessage(options.to, options.message, { account: options.account }).catch((err) => {
     logger.error("回复错误提示失败:", err);
   });
 }
@@ -887,22 +897,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       const isGroup = data.conversationType === "2";
       const groupId = data.openConversationId ?? data.conversationId;
 
-      // 优先使用 sessionWebhook 回复（群聊/单聊通用）
-      if (data.sessionWebhook) {
-        const result = await replyViaWebhook(data.sessionWebhook, replyText);
-        if (result.errcode === 0) {
-          recordChannelRuntimeState({
-            channel: PLUGIN_ID,
-            accountId,
-            state: { lastOutboundAt: Date.now() },
-          });
-          return;
-        }
-        // webhook 失败（可能已过期），尝试主动发送 API 降级
-        logger.warn(`Webhook 回复失败 (errcode: ${result.errcode}), 尝试主动发送 API 降级`);
-      }
-
-      // 降级：通过主动发送 API
+      // 统一使用主动发送 API（需要 accessToken）
       const to = isGroup ? `chat:${groupId}` : data.senderStaffId;
       await sendTextMessage(to, replyText, { account });
 
@@ -1025,15 +1020,17 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       // 校验消息
       const validation = handler.validate(data);
       if (!validation.valid) {
-        replyError(data.sessionWebhook, validation.errorMessage);
+        const errorTo = isGroup ? `chat:${groupId}` : data.senderStaffId;
+        replyError({ to: errorTo, account, message: validation.errorMessage });
         return;
       }
 
       // 异步处理消息
+      const errorTo = isGroup ? `chat:${groupId}` : data.senderStaffId;
       handler.handle(data, account)
         .then((result) => {
           if (!result.success) {
-            replyError(data.sessionWebhook, result.errorMessage);
+            replyError({ to: errorTo, account, message: result.errorMessage });
             return;
           }
           if (result.skipProcessing) {
@@ -1045,7 +1042,7 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         .catch((err) => {
           const errMsg = getErrorMessage(err);
           logger.error(`处理 ${data.msgtype} 消息失败:`, err);
-          replyError(data.sessionWebhook, `消息处理失败：${errMsg}`);
+          replyError({ to: errorTo, account, message: `消息处理失败：${errMsg}` });
         });
     } catch (error) {
       const errMsg = getErrorMessage(error);

@@ -1,4 +1,4 @@
-import type { ResolvedDingTalkAccount, WebhookResponse, MarkdownReplyBody } from "./types.js";
+import type { ResolvedDingTalkAccount } from "./types.js";
 import { logger } from "./logger.js";
 
 // ======================= 钉钉 API 基础封装 =======================
@@ -86,52 +86,6 @@ export interface SendMessageOptions {
 export interface SendMessageResult {
   messageId: string;
   chatId: string;
-}
-
-/**
- * 通过 sessionWebhook 回复消息（markdown 格式）
- */
-export async function replyViaWebhook(
-  webhook: string,
-  content: string,
-  options?: {
-    atUserIds?: string[];
-    isAtAll?: boolean;
-  }
-): Promise<WebhookResponse> {
-  const contentPreview = content.slice(0, 50).replace(/\n/g, " ");
-  logger.log(`[回复消息] via Webhook | ${contentPreview}${content.length > 50 ? "..." : ""}`);
-
-  const title = content.slice(0, 10).replace(/\n/g, " ");
-  const body: MarkdownReplyBody = {
-    msgtype: "markdown",
-    markdown: {
-      title,
-      text: content,
-    },
-    at: {
-      atUserIds: options?.atUserIds ?? [],
-      isAtAll: options?.isAtAll ?? false,
-    },
-  };
-
-  const response = await fetch(webhook, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  const result = (await response.json()) as WebhookResponse;
-
-  if (result.errcode === 0) {
-    logger.log(`[回复消息] 发送成功`);
-  } else {
-    logger.error(`[回复消息] 发送失败: ${result.errmsg ?? JSON.stringify(result)}`);
-  }
-
-  return result;
 }
 
 // ======================= 主动发送消息（BatchSendOTO / OrgGroupSend） =======================
