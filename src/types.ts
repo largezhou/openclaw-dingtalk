@@ -43,6 +43,10 @@ export const DingTalkAccountConfigSchema = z.object({
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   /** 按群 ID 的独立配置 */
   groups: z.record(z.string(), DingTalkGroupConfigSchema).optional(),
+  /** 是否开启 AI 卡片流式回复（打字机效果），默认 false */
+  streamingReply: z.boolean().optional(),
+  /** AI 卡片模板 ID，默认使用钉钉公共 AI 卡片模板 */
+  cardTemplateId: z.string().optional(),
 });
 
 export type DingTalkAccountConfig = z.infer<typeof DingTalkAccountConfigSchema>;
@@ -105,6 +109,10 @@ export interface ResolvedDingTalkAccount {
   groupAllowFrom: Array<string | number>;
   /** 按群 ID 的独立配置 */
   groups: Record<string, DingTalkGroupConfig>;
+  /** 是否开启 AI 卡片流式回复（打字机效果） */
+  streamingReply: boolean;
+  /** AI 卡片模板 ID */
+  cardTemplateId: string;
 }
 
 // ======================= Message Types =======================

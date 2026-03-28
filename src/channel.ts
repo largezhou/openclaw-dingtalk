@@ -99,7 +99,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
     threads: false,
     media: true,
     nativeCommands: false,
-    blockStreaming: true, // 钉钉不支持流式消息
+    blockStreaming: true, // 启用 block 级流式回复（搭配 AI 卡片实现打字机效果）
   },
   commands: {
     enforceOwnerForCommands: true,

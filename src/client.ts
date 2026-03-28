@@ -473,6 +473,252 @@ export function inferMediaType(mimeType: string): DingTalkMediaType {
   return "file";
 }
 
+// ======================= AI 卡片流式回复 API =======================
+
+/** AI Card 状态常量 */
+export const AICardStatus = {
+  PROCESSING: "1",
+  INPUTING: "2",
+  FINISHED: "3",
+  EXECUTING: "4",
+  FAILED: "5",
+} as const;
+
+/** AI 卡片投放目标 */
+export type AICardTarget =
+  | { type: "user"; userId: string }
+  | { type: "group"; openConversationId: string };
+
+/**
+ * 创建 AI 卡片实例
+ *
+ * POST /v1.0/card/instances
+ */
+async function createCardInstance(
+  accessToken: string,
+  params: {
+    cardTemplateId: string;
+    outTrackId: string;
+    callbackType?: "STREAM" | "HTTP";
+    cardData?: {
+      cardParamMap?: Record<string, string>;
+    };
+    imGroupOpenSpaceModel?: { supportForward?: boolean };
+    imRobotOpenSpaceModel?: { supportForward?: boolean };
+  }
+): Promise<void> {
+  const resp = await fetch(`${DINGTALK_API_BASE}/v1.0/card/instances`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-acs-dingtalk-access-token": accessToken,
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`创建卡片实例失败 [${resp.status}]: ${text}`);
+  }
+}
+
+/**
+ * 构建卡片投放请求体
+ */
+function buildDeliverBody(
+  outTrackId: string,
+  target: AICardTarget,
+  robotCode: string
+): Record<string, unknown> {
+  const base = {
+    outTrackId,
+    userIdType: 1,
+  };
+
+  if (target.type === "group") {
+    return {
+      ...base,
+      openSpaceId: `dtv1.card//IM_GROUP.${target.openConversationId}`,
+      imGroupOpenDeliverModel: {
+        robotCode,
+      },
+    };
+  } else {
+    return {
+      ...base,
+      openSpaceId: `dtv1.card//IM_ROBOT.${target.userId}`,
+      imRobotOpenDeliverModel: {
+        spaceType: "IM_ROBOT",
+        robotCode,
+      },
+    };
+  }
+}
+
+/**
+ * 投放卡片
+ *
+ * POST /v1.0/card/instances/deliver
+ */
+async function deliverCard(
+  accessToken: string,
+  outTrackId: string,
+  target: AICardTarget,
+  robotCode: string
+): Promise<void> {
+  const body = buildDeliverBody(outTrackId, target, robotCode);
+
+  const resp = await fetch(`${DINGTALK_API_BASE}/v1.0/card/instances/deliver`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-acs-dingtalk-access-token": accessToken,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`投放卡片失败 [${resp.status}]: ${text}`);
+  }
+}
+
+/**
+ * 创建并投放 AI 卡片（分两步：create + deliver）
+ */
+export async function createAndDeliverAICard(
+  accessToken: string,
+  params: {
+    cardTemplateId: string;
+    outTrackId: string;
+    robotCode: string;
+    target: AICardTarget;
+  }
+): Promise<void> {
+  // Step 1: 创建卡片实例
+  await createCardInstance(accessToken, {
+    cardTemplateId: params.cardTemplateId,
+    outTrackId: params.outTrackId,
+    callbackType: "STREAM",
+    cardData: {
+      cardParamMap: {
+        config: JSON.stringify({ autoLayout: true }),
+      },
+    },
+    imGroupOpenSpaceModel: { supportForward: true },
+    imRobotOpenSpaceModel: { supportForward: true },
+  });
+
+  // Step 2: 投放卡片到目标
+  await deliverCard(accessToken, params.outTrackId, params.target, params.robotCode);
+}
+
+/**
+ * 将卡片切换到 INPUTING 状态
+ *
+ * 关键：在第一次流式更新前，必须先通过 PUT /v1.0/card/instances
+ * 将 flowStatus 切到 INPUTING("2")，否则流式更新会返回 500
+ */
+export async function startCardInputing(
+  accessToken: string,
+  outTrackId: string,
+  content: string = "",
+): Promise<void> {
+  const body = {
+    outTrackId,
+    cardData: {
+      cardParamMap: {
+        flowStatus: AICardStatus.INPUTING,
+        msgContent: content,
+        staticMsgContent: "",
+        sys_full_json_obj: JSON.stringify({
+          order: ["msgContent"],
+        }),
+        config: JSON.stringify({ autoLayout: true }),
+      },
+    },
+  };
+
+  const resp = await fetch(`${DINGTALK_API_BASE}/v1.0/card/instances`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "x-acs-dingtalk-access-token": accessToken,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`切换 INPUTING 状态失败 [${resp.status}]: ${text}`);
+  }
+}
+
+/**
+ * AI 卡片流式更新接口
+ *
+ * PUT /v1.0/card/streaming
+ */
+export async function streamingUpdateCard(
+  accessToken: string,
+  params: {
+    outTrackId: string;
+    key: string;
+    content: string;
+    isFull?: boolean;
+    isFinalize?: boolean;
+    isError?: boolean;
+    guid: string;
+  }
+): Promise<void> {
+  const resp = await fetch(`${DINGTALK_API_BASE}/v1.0/card/streaming`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "x-acs-dingtalk-access-token": accessToken,
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`流式更新卡片失败 [${resp.status}]: ${text}`);
+  }
+}
+
+/**
+ * 普通更新卡片（用于设置最终状态如 FINISHED）
+ *
+ * PUT /v1.0/card/instances
+ */
+export async function updateCard(
+  accessToken: string,
+  params: {
+    outTrackId: string;
+    cardData: {
+      cardParamMap: Record<string, string>;
+    };
+    cardUpdateOptions?: {
+      updateCardDataByKey?: boolean;
+      updatePrivateDataByKey?: boolean;
+    };
+  }
+): Promise<void> {
+  const resp = await fetch(`${DINGTALK_API_BASE}/v1.0/card/instances`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "x-acs-dingtalk-access-token": accessToken,
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`更新卡片失败 [${resp.status}]: ${text}`);
+  }
+}
+
 /**
  * 根据媒体类型获取对应的 Content-Type
  */

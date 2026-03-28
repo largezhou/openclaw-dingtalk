@@ -10,6 +10,9 @@ import type {
 } from "./types.js";
 import { PLUGIN_ID } from "./constants.js";
 
+/** 钉钉公共 AI 卡片模板 ID（平台内置，无需用户手动创建） */
+export const DEFAULT_AI_CARD_TEMPLATE_ID = "02fcf2f4-5e02-4a85-b672-46d1f715543e.schema";
+
 // ======================= Account List Helpers =======================
 
 export { normalizeAccountId };
@@ -152,6 +155,8 @@ export function resolveDingTalkAccount(params: {
     groupPolicy: merged.groupPolicy ?? "open",
     groupAllowFrom: merged.groupAllowFrom ?? [],
     groups: merged.groups ?? {},
+    streamingReply: merged.streamingReply ?? false,
+    cardTemplateId: merged.cardTemplateId?.trim() || DEFAULT_AI_CARD_TEMPLATE_ID,
   };
 }
 

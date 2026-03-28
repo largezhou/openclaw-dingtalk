@@ -1,6 +1,6 @@
 {
   "name": "@largezhou/ddingtalk",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "OpenClaw DingTalk (钉钉) channel plugin",
   "main": "index.ts",
   "type": "module",

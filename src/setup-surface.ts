@@ -15,8 +15,10 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   listDingTalkAccountIds,
   resolveDingTalkAccount,
+  DEFAULT_AI_CARD_TEMPLATE_ID,
 } from "./accounts.js";
 import { PLUGIN_ID } from "./constants.js";
+import type { DingTalkConfig } from "./types.js";
 import {
   DINGTALK_ALLOWFROM_HELP_LINES,
   DINGTALK_CREDENTIAL_HELP_LINES,
@@ -159,5 +161,60 @@ export const dingtalkSetupWizard: ChannelSetupWizard = {
   }),
 
   dmPolicy,
+
+  finalize: async ({ cfg, accountId, prompter }) => {
+    let next = cfg;
+
+    // ---- 流式回复配置 ----
+    const currentAccount = resolveDingTalkAccount({ cfg: next, accountId });
+    const currentStreaming = currentAccount.streamingReply;
+
+    const streamingReply = await prompter.confirm({
+      message: "Enable streaming reply (AI Card typewriter effect)?",
+      initialValue: currentStreaming,
+    });
+
+    next = applySetupAccountConfigPatch({
+      cfg: next,
+      channelKey: channel,
+      accountId,
+      patch: { streamingReply: Boolean(streamingReply) },
+    });
+
+    // ---- 卡片模板 ID 配置（仅在开启流式回复时提示） ----
+    if (streamingReply) {
+      const currentTemplateId = (
+        next.channels?.[channel] as DingTalkConfig | undefined
+      )?.cardTemplateId?.trim() || "";
+
+      const cardTemplateId = String(
+        await prompter.text({
+          message: "AI Card template ID (leave blank for built-in template)",
+          placeholder: DEFAULT_AI_CARD_TEMPLATE_ID,
+          initialValue: currentTemplateId || undefined,
+        }) ?? "",
+      ).trim();
+
+      if (cardTemplateId && cardTemplateId !== DEFAULT_AI_CARD_TEMPLATE_ID) {
+        next = applySetupAccountConfigPatch({
+          cfg: next,
+          channelKey: channel,
+          accountId,
+          patch: { cardTemplateId },
+        });
+      } else {
+        // 使用默认模板，清除自定义配置
+        next = applySetupAccountConfigPatch({
+          cfg: next,
+          channelKey: channel,
+          accountId,
+          patch: { cardTemplateId: undefined },
+        });
+      }
+    }
+
+    return { cfg: next };
+  },
+
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
