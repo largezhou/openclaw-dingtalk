@@ -12,6 +12,7 @@ OpenClaw DingTalk channel plugin, using Stream mode to connect enterprise robots
 - ✅ **Private/Group Chat**: Supports private chat and group chat (only when @robot)
 - ✅ **Text Messages**: Send and receive text messages
 - ✅ **Markdown Reply**: Robot replies in Markdown format
+- ✅ **AI Card Streaming Reply**: Supports DingTalk AI cards with real-time streaming output (typewriter effect)
 - ✅ **Image Messages**: Receive images from users, send local/remote images
 - ✅ **Audio & Video Messages**: Send and receive voice and video messages
 - ✅ **File Messages**: Send and receive files, including rich text messages
@@ -103,14 +104,7 @@ On the app's **Credentials & Basic Information** page, copy:
 
 ![Configure Robot Message Receiving Mode](docs/images/dingtalk/dingtalk-robot-config-stream.png)
 
-### 5. Configure App Permissions
-
-In the app's permission management, make sure the following permissions are enabled:
-
-- Permission for enterprise internal robots to send messages
-- Permission to obtain download links for robot received messages via downloadCode (for receiving images)
-
-### 6. Publish the Robot
+### 5. Publish the Robot
 
 Create a robot version, fill in the version number, description, and application availability scope, click save, then click confirm to publish.
 
@@ -336,6 +330,40 @@ openclaw gateway --verbose
 Find the robot you created in DingTalk, and you can start a normal conversation.
 
 ![DingTalk Conversation](docs/images/dingtalk/dingtalk-chat.jpg)
+
+### 3. AI Card Streaming Reply
+
+The plugin supports streaming replies via DingTalk AI cards. As the AI generates content, it is pushed to the card in real time, creating a typewriter effect for a better conversation experience.
+
+Enable it in the account configuration:
+
+```json
+{
+  "channels": {
+    "ddingtalk": {
+      "enabled": true,
+      "clientId": "your_app_key",
+      "clientSecret": "your_app_secret",
+      "streamingReply": true
+    }
+  }
+}
+```
+
+Once enabled, the robot will:
+1. Immediately display an AI card (showing "Processing" status)
+2. Incrementally output content as the AI generates it (typewriter effect)
+3. Automatically finish the card when generation is complete
+
+![Streaming Reply](docs/images/dingtalk/dingtalk-streaming.jpg)
+
+**Card Template**: The plugin uses the official DingTalk AI card template by default, working out of the box. To customize the card style, create a custom template on the [DingTalk Card Platform](https://open-dev.dingtalk.com/fe/card) and set the template ID in `streamingReplyTemplateId`. In your custom template, the content variable for the "Outputting" step must be named `msgContent`.
+
+![Card Template Variable Configuration](docs/images/dingtalk/card-template.png)
+
+> ⚠️ AI card streaming reply requires the following additional permissions in DingTalk app permission management:
+> - `Card.Instance.Write` — Card instance write permission
+> - `Card.Streaming.Write` — Card streaming write permission
 
 ---
 

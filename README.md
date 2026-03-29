@@ -104,16 +104,7 @@ openclaw channels add
 
 ![配置机器人消息接收模式](docs/images/dingtalk/dingtalk-robot-config-stream.png)
 
-### 5. 配置应用权限
-
-在应用的权限管理中，确保开通以下权限：
-
-- 企业内机器人发送消息权限
-- 根据 downloadCode 获取机器人接收消息的下载链接（用于接收图片）
-- `Card.Instance.Write` — 卡片实例写权限（AI 卡片流式回复需要）
-- `Card.Streaming.Write` — 卡片流式写权限（AI 卡片流式回复需要）
-
-### 6. 发布机器人
+### 5. 发布机器人
 
 创建机器人版本，填入版本号、描述、应用可用范围，点击保存，点击确认发布。
 
@@ -369,6 +360,10 @@ openclaw gateway --verbose
 **卡片模板**：插件默认使用钉钉官方 AI 卡片模板，开箱即用。如需自定义卡片样式，可在 [钉钉卡片平台](https://open-dev.dingtalk.com/fe/card) 创建自定义模板，并将模板 ID 配置到 `streamingReplyTemplateId` 中。自定义模板中，"输出中"步骤的内容变量名需设置为 `msgContent`。
 
 ![卡片模板变量配置](docs/images/dingtalk/card-template.png)
+
+> ⚠️ 使用 AI 卡片流式回复需要在钉钉应用权限管理中额外开通以下权限：
+> - `Card.Instance.Write` — 卡片实例写权限
+> - `Card.Streaming.Write` — 卡片流式写权限
 
 ---
 
