@@ -1007,75 +1007,16 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     }
   };
 
-  /** 创建回复分发器 */
-  const createReplyDispatcher = (data: DingTalkMessageData, cardSession?: AICardSession) => {
+  // ============================================================================
+  // 回复分发器 — 普通文本模式
+  // ============================================================================
+
+  /** 创建普通文本回复分发器（一锤子买卖，发完即止） */
+  const createPlainReplyDispatcher = (data: DingTalkMessageData) => {
     const isGroup = data.conversationType === "2";
     const groupId = data.openConversationId ?? data.conversationId;
     const to = isGroup ? `chat:${groupId}` : data.senderStaffId;
 
-    // ---- 流式卡片回复模式（卡片已提前创建） ----
-    if (account.streamingReply && cardSession) {
-      return {
-        deliver: async (payload: { text?: string }, info: { kind: string }) => {
-          const replyText = payload.text ?? "";
-          if (!replyText) return;
-
-          try {
-            // 第一次有内容时，切换到 INPUTING 状态
-            if (!cardSession.inputingStarted) {
-              await startCardInputing(cardSession.accessToken, cardSession.outTrackId, "");
-              cardSession.inputingStarted = true;
-              logger.log(`[流式卡片] 切换到 INPUTING 状态 | outTrackId: ${cardSession.outTrackId}`);
-            }
-
-            cardSession.accumulatedContent += replyText;
-
-            // 流式更新卡片内容
-            await streamingUpdateCard(cardSession.accessToken, {
-              outTrackId: cardSession.outTrackId,
-              key: "msgContent",
-              content: cardSession.accumulatedContent,
-              isFull: true,
-              isFinalize: false,
-              isError: false,
-              guid: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            });
-
-            // 如果是 final 消息，完成卡片
-            if (info.kind === "final") {
-              await finalizeCardSession(cardSession, "FINISHED");
-            }
-          } catch (err) {
-            logger.error("[流式卡片] 更新失败:", err);
-            // 降级：如果卡片流式失败，尝试用普通文本发送
-            if (info.kind === "final") {
-              await finalizeCardSession(cardSession, "FAILED").catch(() => {});
-              try {
-                await sendTextMessage(to, cardSession.accumulatedContent || replyText, { account });
-                logger.log("[流式卡片] 降级为普通文本发送成功");
-              } catch (fallbackErr) {
-                logger.error("[流式卡片] 降级发送也失败:", fallbackErr);
-              }
-            }
-          }
-
-          recordChannelRuntimeState({
-            channel: PLUGIN_ID,
-            accountId,
-            state: { lastOutboundAt: Date.now() },
-          });
-        },
-        onError: (err: unknown, info: { kind: string }) => {
-          logger.error(`${info.kind} reply failed:`, err);
-          // 出错时将卡片标记为 FAILED（finalizeCardSession 内部会防重复）
-          finalizeCardSession(cardSession, "FAILED").catch((e) =>
-            logger.error("[流式卡片] 标记失败状态出错:", e)
-          );
-        },
-      };
-    }
-
-    // ---- 普通文本回复模式 ----
     return {
       deliver: async (payload: { text?: string }) => {
         const replyText = payload.text ?? "";
@@ -1091,6 +1032,76 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       },
       onError: (err: unknown, info: { kind: string }) => {
         logger.error(`${info.kind} reply failed:`, err);
+      },
+    };
+  };
+
+  // ============================================================================
+  // 回复分发器 — AI 卡片流式模式
+  // ============================================================================
+
+  /** 创建 AI 卡片流式回复分发器（管理卡片生命周期 + 流式更新） */
+  const createStreamingReplyDispatcher = (data: DingTalkMessageData, cardSession: AICardSession) => {
+    const isGroup = data.conversationType === "2";
+    const groupId = data.openConversationId ?? data.conversationId;
+    const to = isGroup ? `chat:${groupId}` : data.senderStaffId;
+
+    return {
+      deliver: async (payload: { text?: string }, info: { kind: string }) => {
+        const replyText = payload.text ?? "";
+        if (!replyText) return;
+
+        try {
+          // 第一次有内容时，切换到 INPUTING 状态
+          if (!cardSession.inputingStarted) {
+            await startCardInputing(cardSession.accessToken, cardSession.outTrackId, "");
+            cardSession.inputingStarted = true;
+            logger.log(`[流式卡片] 切换到 INPUTING 状态 | outTrackId: ${cardSession.outTrackId}`);
+          }
+
+          cardSession.accumulatedContent += replyText;
+
+          // 流式更新卡片内容
+          await streamingUpdateCard(cardSession.accessToken, {
+            outTrackId: cardSession.outTrackId,
+            key: "msgContent",
+            content: cardSession.accumulatedContent,
+            isFull: true,
+            isFinalize: false,
+            isError: false,
+            guid: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          });
+
+          // 如果是 final 消息，完成卡片
+          if (info.kind === "final") {
+            await finalizeCardSession(cardSession, "FINISHED");
+          }
+        } catch (err) {
+          logger.error("[流式卡片] 更新失败:", err);
+          // 降级：如果卡片流式失败，尝试用普通文本发送
+          if (info.kind === "final") {
+            await finalizeCardSession(cardSession, "FAILED").catch(() => {});
+            try {
+              await sendTextMessage(to, cardSession.accumulatedContent || replyText, { account });
+              logger.log("[流式卡片] 降级为普通文本发送成功");
+            } catch (fallbackErr) {
+              logger.error("[流式卡片] 降级发送也失败:", fallbackErr);
+            }
+          }
+        }
+
+        recordChannelRuntimeState({
+          channel: PLUGIN_ID,
+          accountId,
+          state: { lastOutboundAt: Date.now() },
+        });
+      },
+      onError: (err: unknown, info: { kind: string }) => {
+        logger.error(`${info.kind} reply failed:`, err);
+        // 出错时将卡片标记为 FAILED（finalizeCardSession 内部会防重复）
+        finalizeCardSession(cardSession, "FAILED").catch((e) =>
+          logger.error("[流式卡片] 标记失败状态出错:", e)
+        );
       },
     };
   };
@@ -1146,10 +1157,14 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       }
 
       // 6. 分发消息给 OpenClaw
+      const dispatcherOptions = cardSession
+        ? createStreamingReplyDispatcher(data, cardSession)
+        : createPlainReplyDispatcher(data);
+
       const { queuedFinal } = await pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: ctxPayload,
         cfg: config,
-        dispatcherOptions: createReplyDispatcher(data, cardSession),
+        dispatcherOptions,
         replyOptions: {
           // 当使用流式卡片时，强制启用 block streaming，让 OpenClaw 在 AI 生成过程中
           // 逐块调用 deliver 回调，而不是等 AI 生成完毕后一次性推送。
