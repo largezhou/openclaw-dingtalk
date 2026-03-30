@@ -1046,11 +1046,18 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
     const groupId = data.openConversationId ?? data.conversationId;
     const to = isGroup ? `chat:${groupId}` : data.senderStaffId;
 
-    return {
-      deliver: async (payload: { text?: string }, info: { kind: string }) => {
-        const replyText = payload.text ?? "";
-        if (!replyText) return;
+    // ---- 节流式卡片更新（参照飞书 streaming-card.ts 的策略） ----
+    // 核心：**同步**更新 lastUpdateTime，确保节流窗口内的调用只记住 pendingText，
+    // 不入队列。避免旧版异步更新 lastUpdateTime 导致的队列积压问题。
+    // pendingText 在 deliver final / close 时统一 flush，不会丢内容。
+    const THROTTLE_MS = 300;
+    let updateQueue: Promise<void> = Promise.resolve();
+    let lastUpdateTime = 0;
+    let pendingText: string | null = null;
 
+    /** 将一次更新入串行队列（内部用，外部通过 updateCardContent 调用） */
+    const enqueueUpdate = (text: string) => {
+      updateQueue = updateQueue.then(async () => {
         try {
           // 第一次有内容时，切换到 INPUTING 状态
           if (!cardSession.inputingStarted) {
@@ -1059,25 +1066,86 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
             logger.log(`[流式卡片] 切换到 INPUTING 状态 | outTrackId: ${cardSession.outTrackId}`);
           }
 
-          cardSession.accumulatedContent += replyText;
+          // 保存最新的累积内容（snapshot 模式直接替换）
+          cardSession.accumulatedContent = text;
 
-          // 流式更新卡片内容
           await streamingUpdateCard(cardSession.accessToken, {
             outTrackId: cardSession.outTrackId,
             key: "msgContent",
-            content: cardSession.accumulatedContent,
+            content: text,
             isFull: true,
             isFinalize: false,
             isError: false,
             guid: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           });
+        } catch (err) {
+          logger.error("[流式卡片] 流式更新失败:", err);
+        }
+      });
+    };
 
-          // 如果是 final 消息，完成卡片
+    /**
+     * 逐 token 更新卡片内容（由 onPartialReply 调用）。
+     * payload.text 是 snapshot 模式（包含完整累积文本）。
+     *
+     * 节流策略（与飞书一致）：
+     * - 距上次更新不足 THROTTLE_MS → 只记住 pendingText，直接 return，不入队列
+     * - 超过 THROTTLE_MS → **同步**更新 lastUpdateTime，入队列发送
+     * - pendingText 在 deliver final 时统一 flush，保证不丢内容
+     */
+    const updateCardContent = (text: string) => {
+      if (!text) return;
+
+      const now = Date.now();
+      if (now - lastUpdateTime < THROTTLE_MS) {
+        // 节流窗口内：只记住最新文本，不入队列
+        pendingText = text;
+        return;
+      }
+
+      // 超过节流窗口：同步标记时间，清 pending，入队列
+      pendingText = null;
+      lastUpdateTime = now;
+      enqueueUpdate(text);
+    };
+
+    return {
+      /** onPartialReply 回调：逐 token 实时更新卡片 */
+      updateCardContent,
+
+      deliver: async (payload: { text?: string }, info: { kind: string }) => {
+        const replyText = payload.text ?? "";
+
+        try {
+          // 把 pending text 入队（避免 finalize 前丢内容）
+          if (pendingText) {
+            const t = pendingText;
+            pendingText = null;
+            enqueueUpdate(t);
+          }
+
+          // 等待所有 pending 的流式更新完成
+          await updateQueue;
+
+          // final 消息：确保最终文本已写入卡片，然后 finalize
           if (info.kind === "final") {
+            if (replyText && replyText !== cardSession.accumulatedContent) {
+              // 最终文本和流式过程中的可能有差异（如 postfix 模板），补一次全量更新
+              cardSession.accumulatedContent = replyText;
+              await streamingUpdateCard(cardSession.accessToken, {
+                outTrackId: cardSession.outTrackId,
+                key: "msgContent",
+                content: replyText,
+                isFull: true,
+                isFinalize: false,
+                isError: false,
+                guid: `${Date.now()}_final`,
+              });
+            }
             await finalizeCardSession(cardSession, "FINISHED");
           }
         } catch (err) {
-          logger.error("[流式卡片] 更新失败:", err);
+          logger.error("[流式卡片] deliver 失败:", err);
           // 降级：如果卡片流式失败，尝试用普通文本发送
           if (info.kind === "final") {
             await finalizeCardSession(cardSession, "FAILED").catch(() => {});
@@ -1102,6 +1170,28 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
         finalizeCardSession(cardSession, "FAILED").catch((e) =>
           logger.error("[流式卡片] 标记失败状态出错:", e)
         );
+      },
+
+      // ---- 流式结束安全网（参照飞书插件的 onIdle / onCleanup 模式） ----
+      // onIdle: dispatcher 完成所有回复分发后触发（即 deliver final 之后）。
+      // 作为安全网确保卡片一定会被 finalize，即使 deliver 内部逻辑出现遗漏。
+      onIdle: () => {
+        if (!cardSession.finalized) {
+          logger.log(`[流式卡片] onIdle 安全网触发 finalize | outTrackId: ${cardSession.outTrackId}`);
+          finalizeCardSession(cardSession, "FINISHED").catch((e) =>
+            logger.error("[流式卡片] onIdle finalize 失败:", e)
+          );
+        }
+      },
+      // onCleanup: typing controller 被清理时触发（如 NO_REPLY 场景）。
+      // 确保即使没有产生任何回复，卡片也不会永远停在"处理中"。
+      onCleanup: () => {
+        if (!cardSession.finalized) {
+          logger.log(`[流式卡片] onCleanup 安全网触发 finalize | outTrackId: ${cardSession.outTrackId}`);
+          finalizeCardSession(cardSession, "FINISHED").catch((e) =>
+            logger.error("[流式卡片] onCleanup finalize 失败:", e)
+          );
+        }
       },
     };
   };
@@ -1157,20 +1247,30 @@ export function monitorDingTalkProvider(options: MonitorOptions): MonitorResult 
       }
 
       // 6. 分发消息给 OpenClaw
-      const dispatcherOptions = cardSession
+      const streamingDispatcher = cardSession
         ? createStreamingReplyDispatcher(data, cardSession)
-        : createPlainReplyDispatcher(data);
+        : undefined;
+      const dispatcherOptions = streamingDispatcher ?? createPlainReplyDispatcher(data);
 
       const { queuedFinal } = await pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: ctxPayload,
         cfg: config,
         dispatcherOptions,
         replyOptions: {
-          // 当使用流式卡片时，强制启用 block streaming，让 OpenClaw 在 AI 生成过程中
-          // 逐块调用 deliver 回调，而不是等 AI 生成完毕后一次性推送。
-          // 注意：capabilities.blockStreaming 只是声明"渠道支持"，
-          // 还需要在 replyOptions 中显式设置 disableBlockStreaming: false 才能真正启用。
-          ...(cardSession ? { disableBlockStreaming: false } : {}),
+          // 流式卡片模式：禁用 block streaming，改用 onPartialReply 逐 token 实时更新卡片。
+          // block streaming 有 coalescer 缓冲（攒够字符才 flush），延迟太高。
+          // onPartialReply 在每次大模型输出 token 时都会回调，实时性更好。
+          // 参照飞书插件的实现：disableBlockStreaming: true + onPartialReply。
+          ...(streamingDispatcher
+            ? {
+                disableBlockStreaming: true,
+                onPartialReply: (payload: { text?: string }) => {
+                  if (payload.text) {
+                    streamingDispatcher.updateCardContent(payload.text);
+                  }
+                },
+              }
+            : {}),
         },
       });
 
