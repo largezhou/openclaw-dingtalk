@@ -19,8 +19,8 @@ import {
   resolveDefaultDingTalkAccountId,
   resolveDingTalkAccount,
 } from "./accounts.js";
-import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount, type DingTalkGroupConfig } from "./types.js";
-import { sendTextMessage, sendImageMessage, sendFileMessage, sendAudioMessage, sendVideoMessage, uploadMedia, probeDingTalkBot, inferMediaType, isGroupTarget } from "./client.js";
+import { DingTalkConfigSchema, type DingTalkConfig, type ResolvedDingTalkAccount } from "./types.js";
+import { sendTextMessage, sendImageMessage, sendFileMessage, sendAudioMessage, sendVideoMessage, uploadMedia, probeDingTalkBot, inferMediaType } from "./client.js";
 import { logger } from "./logger.js";
 import { monitorDingTalkProvider } from "./monitor.js";
 import { PLUGIN_ID } from "./constants.js";
@@ -30,10 +30,21 @@ import { dingtalkSetupWizard } from "./setup-surface.js";
 
 // ======================= Target Normalization =======================
 
+/** 判断是否为钉钉群聊 openConversationId（常见形态：cid...，可能带 Base64 填充符 =） */
+function isDingTalkOpenConversationId(id: string): boolean {
+  return /^cid[a-zA-Z0-9+/=_-]+$/i.test(id.trim());
+}
+
+/** 判断是否为钉钉用户 ID */
+function isDingTalkUserId(id: string): boolean {
+  return /^[a-zA-Z0-9_$+-]+$/i.test(id.trim());
+}
+
 /**
  * 标准化钉钉发送目标
  * 支持格式：
  * - 原始用户 ID
+ * - 原始群聊 openConversationId（cid...）→ chat:<openConversationId>
  * - ddingtalk:user:<userId>  → <userId>
  * - ddingtalk:chat:<groupId> → chat:<groupId>（保留 chat: 前缀用于群聊路由）
  * - ddingtalk:<id>
@@ -58,20 +69,27 @@ function normalizeDingTalkTarget(target: string): string | undefined {
     return trimmed.slice(5) ? trimmed : undefined;
   }
 
-  // 去除 ddingtalk:user: 或 ddingtalk: 前缀
-  const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i");
-  const withoutPrefix = trimmed.replace(prefixPattern, "");
+  // 显式用户格式始终按用户 ID 处理，避免 user:cid... 被误判为群聊
+  const userPrefixPattern = new RegExp(`^${PLUGIN_ID}:user:`, "i");
+  const explicitUserId = userPrefixPattern.test(trimmed)
+    ? trimmed.replace(userPrefixPattern, "")
+    : trimmed.replace(/^user:/i, "");
+  if (explicitUserId !== trimmed) {
+    return isDingTalkUserId(explicitUserId) ? explicitUserId : undefined;
+  }
 
-  // 去除 user: 前缀
-  const userId = withoutPrefix.replace(/^user:/, "");
-
-  if (!userId) {
+  const withoutChannelPrefix = trimmed.replace(new RegExp(`^${PLUGIN_ID}:`, "i"), "");
+  if (!withoutChannelPrefix) {
     return undefined;
   }
 
-  // 验证格式：钉钉 ID 一般是字母数字组合
-  if (/^[a-zA-Z0-9_$+-]+$/i.test(userId)) {
-    return userId;
+  // 钉钉群聊 openConversationId 可能被 OpenClaw 以原始 cid... 形式作为 target 传入
+  if (isDingTalkOpenConversationId(withoutChannelPrefix)) {
+    return `chat:${withoutChannelPrefix}`;
+  }
+
+  if (isDingTalkUserId(withoutChannelPrefix)) {
+    return withoutChannelPrefix;
   }
 
   return undefined;
@@ -184,12 +202,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         if (!trimmed) {
           return false;
         }
-        // 钉钉用户 ID 或群聊 ID
-        const prefixPattern = new RegExp(`^${PLUGIN_ID}:`, "i");
-        return /^[a-zA-Z0-9_-]+$/i.test(trimmed)
-          || prefixPattern.test(trimmed)
-          || trimmed.startsWith("chat:")
-          || trimmed.startsWith("user:");
+        return Boolean(normalizeDingTalkTarget(trimmed));
       },
       hint: "<userId> or chat:<openConversationId>",
     },
