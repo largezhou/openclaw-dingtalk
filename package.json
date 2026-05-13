@@ -1,6 +1,6 @@
 {
   "name": "@largezhou/ddingtalk",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "OpenClaw DingTalk (钉钉) channel plugin",
   "main": "./dist/index.js",
   "type": "module",
@@ -33,6 +33,9 @@
   ],
   "author": "largezhou",
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "dingtalk-stream": "^2.1.4",
     "zod": "^4.0.0"
@@ -57,6 +60,11 @@
       "docsPath": "/channels/ddingtalk",
       "docsLabel": "ddingtalk",
       "blurb": "DingTalk enterprise robot with Stream mode for Chinese market.",
+      "aliases": [
+        "dingtalk",
+        "dingding",
+        "钉钉"
+      ],
       "order": 80,
       "quickstartAllowFrom": true
     },

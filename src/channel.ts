@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/core";
 import type { ChannelStatusIssue, ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import path from "path";
 import { getDingTalkRuntime } from "./runtime.js";
@@ -276,7 +277,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
       const result = await sendTextMessage(to, text, { account });
       return { channel: PLUGIN_ID, ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, cfg, accountId }) => {
+    sendMedia: async ({ to, text, mediaUrl, cfg, accountId, mediaLocalRoots }) => {
       // 没有媒体 URL，提前返回
       if (!mediaUrl) {
         logger.warn("[sendMedia] 没有 mediaUrl，跳过");
@@ -289,7 +290,10 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
         logger.log(`准备发送媒体: ${mediaUrl}`);
 
         // 使用 OpenClaw 的 loadWebMedia 加载媒体（支持 URL、本地路径、file://、~ 等）
-        const media = await loadWebMedia(mediaUrl);
+        const media = await loadWebMedia(
+          mediaUrl,
+          buildOutboundMediaLoadOptions({ mediaLocalRoots }),
+        );
         const mimeType = media.contentType ?? "application/octet-stream";
         const mediaType = inferMediaType(mimeType);
 
